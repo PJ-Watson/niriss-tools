@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=61.0","oldest-supported-numpy", "setuptools_scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "GLASS-NIRISS"
+dynamic = ["version"]
+authors = [
+  { name="Peter J. Watson", email="peter.watson+GN@inaf.it" },
+]
+description = "A complete pipeline for processing JWST-NIRISS data."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "astropy>=5.3",
+    "numpy>=2.0",
+    "matplotlib>=3.9",
+    # "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit>=3.8"
+]
+docs = [
+    "sphinx-copybutton>=0.5",
+    "sphinx>=8.0",
+    "numpydoc>=1.8",
+    "furo>=2024.08",
+]
+grizli = [
+    "grizli[jwst]"
+]
+isophotal = [
+    "bottleneck>=1.4",
+    "photutils>=1.13",
+    "reproject>=0.14",
+    "shapely>=2.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/PJ-Watson/GLASS-NIRISS"
+"Bug Tracker" = "https://github.com/PJ-Watson/GLASS-NIRISS/issues"
+
+[tool.setuptools.package-data]
+"*" = ["*.*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+extend-exclude = '(.*.txt|.*.md|.*.toml|.*.odg)'
+preview = true
+
+[tool.isort]
+profile = "black"
+
+[tool.numpydoc_validation]
+checks = [
+    "all",   # report on all checks, except the below
+    "EX01",
+    "SA01",
+    "ES01",
+]
+exclude = [  # don't report on objects that match any of these regex
+    '\.undocumented_method$',
+    '\.__repr__$',
+    '\._.*$',  # Ignore anything that's private (e.g., starts with _)
+]
+override_SS05 = [  # override SS05 to allow docstrings starting with these words
+    '^Process ',
+    '^Assess ',
+    '^Access ',
+]
+
+[tool.setuptools_scm]
+version_file = "src/glass_niriss/_version.py"
