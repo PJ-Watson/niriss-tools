@@ -10,8 +10,6 @@ import astropy.units as u
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
-
-# from typing import Tuple
 from numpy.typing import ArrayLike
 from reproject import reproject_adaptive, reproject_exact, reproject_interp
 from reproject.mosaicking import find_optimal_celestial_wcs

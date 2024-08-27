@@ -69,6 +69,7 @@ checks = [
     "EX01",
     "SA01",
     "ES01",
+    "RT01",
 ]
 exclude = [  # don't report on objects that match any of these regex
     '\.undocumented_method$',
