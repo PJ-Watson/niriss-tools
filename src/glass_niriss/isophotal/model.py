@@ -15,8 +15,10 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from numpy.typing import ArrayLike
 from photutils.background import Background2D
-from photutils.isophote import Ellipse, EllipseGeometry, build_ellipse_model
+from photutils.isophote import Ellipse, EllipseGeometry  # , build_ellipse_model
 from photutils.segmentation import SourceCatalog, SourceFinder, make_2dgaussian_kernel
+
+from glass_niriss.c_utils import build_ellipse_model
 
 _bcg_attr_warn = (
     "No bCGs have been identified yet. Please run "

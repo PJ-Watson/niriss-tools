@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0","oldest-supported-numpy", "setuptools_scm>=8.0"]
+requires = ["setuptools>=61.0","numpy>=2", "setuptools_scm>=8.0","Cython>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -20,11 +20,12 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "astropy>=5.3",
+    "astropy>=6.1",
     "numpy>=2.0",
     "matplotlib>=3.9",
     # "tqdm>=4.66",
-    "scipy>=1.13"
+    "scipy>=1.13",
+    "Cython>=3"
 ]
 
 [project.optional-dependencies]
@@ -44,7 +45,7 @@ isophotal = [
     "bottleneck>=1.4",
     "photutils>=1.13",
     "reproject>=0.14",
-    "shapely>=2.0"
+    "shapely>=2.0.4"
 ]
 
 [project.urls]
