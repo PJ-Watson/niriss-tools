@@ -161,3 +161,4 @@ cython_debug/
 #.idea/
 
 isophote_model.c
+array_ops.c

@@ -9,8 +9,6 @@ from a list of isophotes.
 import numpy as np
 from scipy.interpolate import LSQUnivariateSpline
 
-# import ctypes as ct
-
 cimport cython
 cimport numpy as np
 
@@ -52,8 +50,8 @@ def build_ellipse_model(
     isolist : `~photutils.isophote.IsophoteList` instance
         The isophote list created by the `~photutils.isophote.Ellipse`
         class.
-    nthreads: float, optiomal
-    	Number of threads to perform work. Default is 1 (serial code).
+    nthreads: float, optional
+    	Number of threads to execute the task. Default is 1 (serial code).
     fill : float, optional
         The constant value to fill empty pixels. If an output pixel has
         no contribution from any isophote, it will be assigned this
@@ -110,36 +108,31 @@ def build_ellipse_model(
     eps_array[np.where(eps_array < 0.)] = 0.05
 
     # convert everything to C-type array (pointers)
-    cdef double[::1] c_fss_array = finely_spaced_sma
-    cdef double[::1] c_intens_array = intens_array
-    cdef double[::1] c_eps_array = eps_array
-    cdef double[::1] c_pa_array = pa_array
-    cdef double[::1] c_x0_array = x0_array
-    cdef double[::1] c_y0_array = y0_array
-    cdef double[::1] c_a3_array = a3_array
-    cdef double[::1] c_b3_array = b3_array
-    cdef double[::1] c_a4_array = a4_array
-    cdef double[::1] c_b4_array = b4_array
+    cdef np.float64_t[::1] c_fss_array = finely_spaced_sma
+    cdef np.float64_t[::1] c_intens_array = intens_array
+    cdef np.float64_t[::1] c_eps_array = eps_array
+    cdef np.float64_t[::1] c_pa_array = pa_array
+    cdef np.float64_t[::1] c_x0_array = x0_array
+    cdef np.float64_t[::1] c_y0_array = y0_array
+    cdef np.float64_t[::1] c_a3_array = a3_array
+    cdef np.float64_t[::1] c_b3_array = b3_array
+    cdef np.float64_t[::1] c_a4_array = a4_array
+    cdef np.float64_t[::1] c_b4_array = b4_array
 
     # initialize result and weight arrays, also as 1D ctype array
-    result = np.zeros(shape=(shape[1]*shape[0],))
-    cdef double[::1] result_memview = result
-    weight = np.zeros(shape=(shape[1]*shape[0],))
-    cdef double[::1] weight_memview = weight
-    # cdef double* c_result = &result[0]
-    # cdef double* c_weight = &weight[0]
+    result = np.zeros(shape=(shape[1]*shape[0],), dtype=np.float64)
+    cdef np.float64_t[::1] result_memview = result
+    weight = np.zeros(shape=(shape[1]*shape[0],), dtype=np.float64)
+    cdef np.float64_t[::1] weight_memview = weight
 
-    # convert high_harmnics bool flag to int,
+    # convert high_harmonics bool flag to int,
     # convert all other ints to ctype
     cdef int c_high_harm = int(high_harmonics)
     cdef int c_N = len(finely_spaced_sma)
     cdef int c_nrows = shape[0]
     cdef int c_ncols = shape[1]
 
-    # # load into C worker function (worker.so should be in same directory)
-    # lib = ct.cdll.LoadLibrary('./worker.so')
-    # lib.worker.restype = None
-    # lib.
+    # # load into C worker function
     worker(&result_memview[0], &weight_memview[0], c_nrows, c_ncols, c_N, c_high_harm,
                &c_fss_array[0], &c_intens_array[0], &c_eps_array[0], &c_pa_array[0],
                &c_x0_array[0], &c_y0_array[0], &c_a3_array[0], &c_b3_array[0],

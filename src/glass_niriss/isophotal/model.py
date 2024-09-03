@@ -3,6 +3,7 @@ Create isophotal models of galaxies using an iterative process.
 """
 
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import astropy.units as u
@@ -15,10 +16,10 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from numpy.typing import ArrayLike
 from photutils.background import Background2D
-from photutils.isophote import Ellipse, EllipseGeometry  # , build_ellipse_model
+from photutils.isophote import Ellipse, EllipseGeometry, build_ellipse_model
 from photutils.segmentation import SourceCatalog, SourceFinder, make_2dgaussian_kernel
 
-from glass_niriss.c_utils import build_ellipse_model
+from glass_niriss.c_utils import build_ellipse_model as fast_build_ellipse_model
 
 _bcg_attr_warn = (
     "No bCGs have been identified yet. Please run "
@@ -268,6 +269,8 @@ class ClusterModels:
         """
         Load a catalogue of galaxies to be modelled.
 
+        The galaxies should be sorted in order of decreasing flux.
+
         Parameters
         ----------
         bcg_catalogue : `~os.PathLike` | `~astropy.table.Table`
@@ -355,26 +358,53 @@ class ClusterModels:
 
         return
 
-    # def _check_wcs(self):
+    def load_segmentation(
+        self,
+        seg_map: os.PathLike | ArrayLike,
+        seg_cat: os.PathLike | Table | None = None,
+        seg_map_hdu_index: int | str = "SEG_MAP",
+        seg_cat_hdu_index: int | str = "SEG_CAT",
+        seg_wcs: WCS | None = None,
+    ):
+        """
+        Load an existing segmentation map and catalogue.
 
-    # def load_segmentation(
-    #     seg_cat : os.PathLike | Table,
-    #     seg_map : os.PathLike | ArrayLike,
-    #     seg_map_hdu_index: int = 0,
-    #     seg_wcs : WCS = None,
-    # ):
+        Parameters
+        ----------
+        seg_map : os.PathLike | ArrayLike
+            The segmentation map, passed as either a filepath or an array.
+        seg_cat : os.PathLike | Table | None, optional
+            Either the filepath of the catalogue, or the catalogue in the
+            form of a `~astropy.table.Table`. By default None, will
+            attempt to load from the same file as `seg_map`.
+        seg_map_hdu_index : int | str, optional
+            The index or name of the HDU containing the segmentation map,
+            by default "SEG_MAP".
+        seg_cat_hdu_index : int | str, optional
+            The index or name of the HDU containing the segmentation
+            catalogue, by default "SEG_CAT".
+        seg_wcs : WCS | None, optional
+            The WCS of the segmentation map. If this is not supplied, and
+            `seg_map` is `ArrayLike`, this will be copied from `img_wcs`.
+        """
 
-    #     if isinstance(seg_cat, Table):
-    #         self.seg_cat = seg_cat
-    #     else:
-    #         self.seg_cat = Table.read(seg_cat)
+        if isinstance(seg_cat, Table):
+            self._seg_cat = seg_cat
+        elif seg_cat is None:
+            self._seg_cat = Table.read(seg_map, hdu=seg_cat_hdu_index)
+        else:
+            self._seg_cat = Table.read(seg_cat, hdu=seg_cat_hdu_index)
 
-    #     if isinstance(seg_map, os.PathLike):
-    #         with fits.open(seg_map, memmap=False) as seg_hdul:
-    #             self.seg_map = seg_hdul[seg_map_hdu_index].data.copy()
-    #             self.seg_wcs = WCS(self.seg_hdul[seg_map_hdu_index].header.copy())
-
-    # # load into memory, match against bcg cat
+        if isinstance(seg_map, os.PathLike):
+            with fits.open(seg_map, memmap=False) as seg_hdul:
+                self._seg_map = seg_hdul[seg_map_hdu_index].data.copy()
+                self._seg_wcs = WCS(seg_hdul[seg_map_hdu_index].header.copy())
+        else:
+            self._seg_map = seg_map
+            if seg_wcs is not None:
+                self._seg_wcs = seg_wcs
+            elif self._img_wcs is not None:
+                self._seg_wcs = self._img_wcs.deepcopy()
 
     def gen_segmentation(
         self,
@@ -544,22 +574,207 @@ class ClusterModels:
     # # re-run segmentation, gen and check mask
     # # re-run _model_galaxy()
 
+    def match_bcgs(self, plot: bool = False) -> ArrayLike:
+        """
+        Match the bCG catalogue to the segmentation map.
+
+        Parameters
+        ----------
+        plot : bool
+            Plot the image with all non-bCGs masked out.
+
+        Returns
+        -------
+        ArrayLike
+            A 1D array containing the integer labels of the bCGs in the
+            segmentation map.
+        """
+        assert self._seg_cat is not None and self._seg_map is not None, _seg_attr_warn
+        assert self._bcg_cat is not None, _bcg_attr_warn
+        assert self._img_data is not None, _img_attr_warn.format("img_data")
+
+        assert (
+            self._seg_map.shape == self._img_data.shape
+        ), "Image shape does not match segmentation map."
+        if self._seg_wcs is not None:
+            assert self._seg_wcs.wcs.compare(
+                self._img_wcs.wcs
+            ), "The segmentation map and image must have the same WCS."
+        else:
+            self._seg_wcs = self._img_wcs.copy()
+
+        seg_cat_coords = SkyCoord.guess_from_table(self._seg_cat)
+        matched, _, _ = self.bcg_coords.match_to_catalog_sky(seg_cat_coords)
+        try:
+            seg_ids = self._seg_cat["obj_id"][matched]
+        except:
+            seg_ids = self._seg_cat["label"][matched]
+
+        if plot:
+            import astropy.visualization as astrovis
+            import matplotlib.pyplot as plt
+
+            print(self._img_data.shape)
+            print(self._seg_map.shape)
+            masked_img = ma.masked_array(
+                self._img_data,
+                (self._seg_map > 0) & (~np.isin(self._seg_map, seg_ids)),
+            )
+            plt.imshow(
+                masked_img,
+                norm=astrovis.ImageNormalize(
+                    data=masked_img,
+                    stretch=astrovis.LogStretch(),
+                    interval=astrovis.PercentileInterval(99.9),
+                ),
+                cmap="binary",
+                origin="lower",
+            )
+            plt.scatter(
+                *self._seg_wcs.world_to_pixel(self.bcg_coords),
+                c="r",
+                s=5,
+            )
+            plt.show()
+            # print (seg_ids)
+
+        return np.array(seg_ids)
+
+    def model_galaxies(self):
+        """
+        Model the galaxies in this field.
+        """
+
+        models_hdul = fits.HDUList(
+            [
+                fits.PrimaryHDU(),
+                fits.ImageHDU(
+                    data=self._img_data,
+                    header=self._img_hdr,
+                    name="IMAGE",
+                ),
+                fits.ImageHDU(
+                    data=self._background.background,
+                    header=self._img_hdr,
+                    name="BACK",
+                ),
+                fits.ImageHDU(
+                    data=self._background.background_rms,
+                    header=self._img_hdr,
+                    name="BACK_RMS",
+                ),
+                fits.ImageHDU(
+                    data=self._seg_map,
+                    header=self._seg_wcs.to_header(),
+                    name="SEG_MAP",
+                ),
+                fits.BinTableHDU(
+                    data=self._seg_cat,
+                    name="SEG_CAT",
+                ),
+                fits.ImageHDU(
+                    data=np.zeros_like(self._seg_map, dtype=int),
+                    header=self._seg_wcs.to_header(),
+                    name="ADD_MASK",
+                ),
+                fits.ImageHDU(
+                    data=np.zeros_like(self._seg_map, dtype=float),
+                    header=self.img_wcs.to_header(),
+                    name="MODELS",
+                ),
+                fits.BinTableHDU(
+                    data=Table(),
+                    name="MOD_CAT",
+                ),
+                fits.ImageHDU(
+                    data=np.zeros((51, 51)),
+                    name="PSF",
+                ),
+            ]
+        )
+
+        seg_ids = self.match_bcgs()
+
+        self._curr_img = deepcopy(self._img_data)
+
+        self._first_iteration(gal_ids=seg_ids)
+
+        # def iterate_models()
+        # # Store progress in a multi-extension FITS file
+        # # ext 0 : image
+        # # ext 1 : background
+        # # ext 2 : background.rms
+        # # ext 3 : seg map
+        # # ext 4 : additional mask
+        # # ext 5 : all models
+        # # ext 6 : models table (hdr: "ITERNUM"=iteration, "CURRMOD"=model about to be run)
+        # # i.e. ITERNUM=3, CURRMOD=0 indicates 0, 1, and 2nd iterations fully complete
+        # # OR: MODELHIST as historical tables
+
+        # # Need to load PSF somewhere
+        # # Keep PSF deconv as a flag?
+
+    def _first_iteration(self, gal_ids: ArrayLike):
+
+        for gal_id in gal_ids:
+            try:
+                cutout_idxs, (y0, x0) = self.cutout_slice(obj_id=gal_id)
+                fit_kwargs = {"fflag": 0.5}
+                model, iso = self._model_galaxy(
+                    self._curr_img[cutout_idxs]
+                    - self._background.background[cutout_idxs],
+                    mask=((self._seg_map > 0) & (self._seg_map != gal_id))[cutout_idxs],
+                    x0=x0,
+                    y0=y0,
+                    sma=10,
+                    plot=False,
+                    **fit_kwargs,
+                )
+
+                self._curr_img[cutout_idxs] -= model
+            except Exception as e:
+                print(gal_id, e)
+
+            if gal_id == gal_ids[10]:
+                import astropy.visualization as astrovis
+                import matplotlib.pyplot as plt
+
+                norm = astrovis.ImageNormalize(
+                    data=self._curr_img,
+                    # stretch=astrovis.
+                    stretch=astrovis.LogStretch(),
+                    interval=astrovis.PercentileInterval(99.9),
+                    # interval=astrovis.ManualInterval(-0.1, 50),
+                )
+                fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+                axs[0, 0].imshow(self._img_data, norm=norm, origin="lower")
+                axs[0, 1].imshow(
+                    self._img_data - self._background.background,
+                    norm=norm,
+                    origin="lower",
+                )
+                axs[1, 0].imshow(
+                    self._img_data - self._curr_img, norm=norm, origin="lower"
+                )
+                axs[1, 1].imshow(self._curr_img, norm=norm, origin="lower")
+                plt.show()
+
     @staticmethod
     def _model_galaxy(
-        cutout,
-        mask,
-        x0,
-        y0,
-        sma,
-        eps=0.3,
-        pa=1.0,
-        recentre=False,
-        plot=False,
+        cutout: ArrayLike,
+        x0: float,
+        y0: float,
+        sma: float = 10,
+        eps: float = 0.3,
+        pa: float = 1.0,
+        mask: ArrayLike | None = None,
+        recentre: bool = False,
+        plot: bool = False,
+        nthreads: int = 8,
         **fit_kwargs,
     ):
 
         data = ma.masked_array(cutout, mask)
-        import matplotlib.pyplot as plt
 
         # plt.imshow(data, origin="lower")
         # plt.scatter(x0,y0,c="red")
@@ -582,20 +797,29 @@ class ClusterModels:
         # iso_tab = isolist.to_table()
         # print (iso_tab.colnames)
 
-        model_image = build_ellipse_model(data.shape, isolist, high_harmonics=True)
-        residual = cutout - model_image
+        # model_image = build_ellipse_model(data.shape, isolist, high_harmonics=True)
+        model_image = fast_build_ellipse_model(
+            data.shape, isolist, high_harmonics=True, nthreads=nthreads
+        )
+        # np.testing.assert_allclose(model_image2, model_image)
+        # model_image = build_ellipse_model(data.shape, isolist, high_harmonics=True, nthreads=8)
 
         if plot:
             import astropy.visualization as astrovis
+            import matplotlib.pyplot as plt
+
+            residual = cutout - model_image
 
             norm = astrovis.ImageNormalize(
                 data=cutout,
                 # stretch=astrovis.
                 stretch=astrovis.LogStretch(),
-                # interval=astrovis.PercentileInterval(99.9),
-                interval=astrovis.ManualInterval(-0.1, 50),
+                interval=astrovis.PercentileInterval(99.9),
+                # interval=astrovis.ManualInterval(-0.1, 50),
             )
             fig, axs = plt.subplots(1, 3)  # , sharex=True, sharey=True)
+            # for j, model in enumerate([model_image, model_image2]):
+            # axs_row = axs[j]
             for i, (a, im) in enumerate(zip(axs, [data, model_image, residual])):
                 a.imshow(im, origin="lower", norm=norm)
 

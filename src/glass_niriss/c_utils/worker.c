@@ -64,7 +64,7 @@ void worker(double* result, double* weight, int n_rows, int n_cols, int N, int h
           harm = (a3_arr[i] * sin(3.0*phi) +
           	b3_arr[i] * cos(3.0*phi) +
           	a4_arr[i] * sin(4.0*phi) +
-          	b4_arr[i] * cos(4.0*phi)) / 4.0;
+          	b4_arr[i] * cos(4.0*phi));
         }
         double x = r * cos(phi + pa) + x0;
         double y = r * sin(phi + pa) + y0;
