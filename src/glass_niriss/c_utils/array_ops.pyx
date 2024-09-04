@@ -19,9 +19,12 @@ from libc.math cimport pow
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def calc_chisq(
-    np.ndarray[DTYPE_t, ndim=2, mode='c'] models,
-    np.ndarray[DTYPE_t, ndim=1, mode='c'] obs,
-    np.ndarray[DTYPE_t, ndim=1, mode='c'] inv_sig_sq,
+    # np.ndarray[DTYPE_t, ndim=2, mode='c'] models,
+    # np.ndarray[DTYPE_t, ndim=1, mode='c'] obs,
+    # np.ndarray[DTYPE_t, ndim=1, mode='c'] inv_sig_sq,
+    DTYPE_t[:,::1] models,
+    DTYPE_t[::1] obs,
+    DTYPE_t[::1] inv_sig_sq,
 ):
     """
     Calculate the chi-squared values for an array of models.
@@ -46,10 +49,10 @@ def calc_chisq(
     I = models.shape[0]
     J = models.shape[1]
 
-    cdef np.ndarray[DTYPE_t, ndim=1, mode='c'] chisq = np.zeros(I, dtype=DTYPE)
+    cdef DTYPE_t[::1] chisq = np.zeros(I, dtype=DTYPE)
 
     for i in range(I):
         for j in range(J):
             chisq[i] += pow(models[i,j]-obs[j], 2)*inv_sig_sq[j]
 
-    return chisq
+    return np.asarray(chisq)

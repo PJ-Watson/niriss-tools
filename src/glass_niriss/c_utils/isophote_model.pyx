@@ -34,14 +34,16 @@ def build_ellipse_model(
 ):
     """
     Build a model elliptical galaxy image from a list of isophotes.
+
     For each ellipse in the input isophote list the algorithm fills the
     output image array with the corresponding isophotal intensity.
     Pixels in the output array are in general only partially covered by
-    the isophote "pixel".  The algorithm takes care of this partial
+    the isophote "pixel". The algorithm takes care of this partial
     pixel coverage by keeping track of how much intensity was added to
     each pixel by storing the partial area information in an auxiliary
-    array.  The information in this array is then used to normalize the
+    array. The information in this array is then used to normalize the
     pixel intensities.
+
     Parameters
     ----------
     shape : 2-tuple
@@ -60,6 +62,7 @@ def build_ellipse_model(
         Whether to add the higher-order harmonics (i.e., ``a3``, ``b3``,
         ``a4``, and ``b4``; see `~photutils.isophote.Isophote` for
         details) to the result.
+
     Returns
     -------
     result : 2D `~numpy.ndarray`
