@@ -5,6 +5,7 @@ Functions to bin data to a specified signal/noise.
 import astropy.visualization as astrovis
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy.typing import ArrayLike
 from vorbin.voronoi_2d_binning import voronoi_2d_binning
 
 __all__ = ["hexbin", "constrained_adaptive"]
@@ -126,7 +127,7 @@ def constrained_adaptive(
     which selects any bins that achieve the target S/N. This is followed
     by a Voronoi tesselation on all remaining pixels, using the method of
     `Cappellari & Copin 2003\
-<https://ui.adsabs.harvard.edu/abs/2003MNRAS.342..345C>`_.
+        <https://ui.adsabs.harvard.edu/abs/2003MNRAS.342..345C>`_.
 
     Parameters
     ----------
