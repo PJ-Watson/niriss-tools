@@ -8,16 +8,19 @@ clarity, and any use of this module should cite
 """
 
 import contextlib
+import os
 from copy import deepcopy
 from functools import partial
-from multiprocessing import Pool, cpu_count, shared_memory
+from multiprocessing import Manager, Pool, cpu_count, shared_memory
 from multiprocessing.managers import SharedMemoryManager
 from os import PathLike
+from pathlib import Path
 from typing import Callable
 
 import bagpipes
 import h5py
 import numpy as np
+from astropy.table import Table
 from bagpipes.fitting.prior import dirichlet, prior
 from bagpipes.models import model_galaxy
 from numpy.typing import ArrayLike
@@ -347,13 +350,32 @@ class AtlasGenerator:
         """
         return np.asarray([*model_gal.photometry, float(model_gal.sfh.unphysical)])
 
+    def _get_pgb_pos(self, shared_list):
+        # Acquire lock and get a progress bar slot
+        for i in range(self.n_proc):
+            if shared_list[i] == 0:
+                shared_list[i] = 1
+                return i
+
+    def _release_pgb_pos(self, shared_list, slot):
+        shared_list[slot] = 0
+
     def _shared_memory_worker(
-        self, indices, shared_init, init_shape, shared_output, output_shape, store_fn
+        self,
+        indices,
+        shared_init,
+        init_shape,
+        shared_output,
+        output_shape,
+        store_fn,
+        tqdm_list,
     ):
         # return
         # print(shared_init[indices].shape)
         # param_cube = np.zeros_like(cubes)
         # print (indices)
+        pgb_pos = self._get_pgb_pos(tqdm_list)
+
         worker_id = indices[0]
         indices = indices[1]
         model_obj = None
@@ -364,23 +386,32 @@ class AtlasGenerator:
         output_arr = np.ndarray(output_shape, dtype=float, buffer=shm_output.buf)
 
         # for i, c in tqdm(enumerate(cubes), total=n_samples):
-        for i, idx_i in tqdm(
-            enumerate(indices), total=len(indices), position=worker_id
-        ):
-            # print(c)
-            param_vector = self.prior.transform(init_arr[idx_i])
-            init_arr[idx_i] = param_vector
-            # print (param_vector)
-            if i == 0:
-                model_obj = self.sample_from_params(param_vector)
-            else:
-                model_obj = self.sample_from_params(param_vector, model_gal=model_obj)
-            # print (store_fn)
-            output_arr[idx_i] = store_fn(model_obj)
-            # print (model_obj.photometry)
-            # print (shared_output[idx_i])
-        # print (output_arr)
-        # print (self.model_atlas[i])
+        try:
+            for i, idx_i in tqdm(
+                enumerate(indices),
+                total=len(indices),
+                position=pgb_pos + 1,
+                desc=f"Worker {worker_id}",
+                leave=False,
+            ):
+                # print(c)
+                param_vector = self.prior.transform(init_arr[idx_i])
+                init_arr[idx_i] = param_vector
+                # print (param_vector)
+                if i == 0:
+                    model_obj = self.sample_from_params(param_vector)
+                else:
+                    model_obj = self.sample_from_params(
+                        param_vector, model_gal=model_obj
+                    )
+                # print (store_fn)
+                output_arr[idx_i] = store_fn(model_obj)
+                # print (model_obj.photometry)
+                # print (shared_output[idx_i])
+            # print (output_arr)
+            # print (self.model_atlas[i])
+        finally:
+            self._release_pgb_pos
 
     def gen_samples(
         self,
@@ -462,14 +493,19 @@ class AtlasGenerator:
         else:
 
             if parallel < 0:
-                n_proc = cpu_count()
+                self.n_proc = cpu_count()
             else:
-                n_proc = parallel
+                self.n_proc = parallel
 
             print(
-                f"Generating {n_samples} samples using {n_proc} process(es), "
+                f"Generating {n_samples} samples using {self.n_proc} process(es), "
                 f"with {self.ndim} free parameters."
             )
+
+            # https://github.com/tqdm/tqdm/issues/1000
+            manager = Manager()
+            shared_list = manager.list([0] * self.n_proc)
+            lock = manager.Lock()
 
             with SharedMemoryManager() as smm:
                 cubes = rng.random((n_samples, self.ndim))
@@ -484,7 +520,7 @@ class AtlasGenerator:
                 # if chunk_size is None:
                 #     chunk_size = n_samples // parallel
                 _indices = np.arange(n_samples)
-                array_indices = np.array_split(_indices, n_proc)
+                array_indices = np.array_split(_indices, self.n_proc)
 
                 # cubes = rng.random((n_samples, self.ndim))
                 shm_out = smm.SharedMemory(
@@ -495,7 +531,9 @@ class AtlasGenerator:
                 )
                 # shared_model_atlas[:] = cubes[:]
 
-                with Pool(processes=n_proc) as pool:
+                with Pool(
+                    processes=self.n_proc, initializer=tqdm.set_lock, initargs=(lock,)
+                ) as pool:
                     multi_fn = partial(
                         self._shared_memory_worker,
                         shared_init=shm_in.name,
@@ -503,10 +541,9 @@ class AtlasGenerator:
                         shared_output=shm_out.name,
                         output_shape=shared_model_atlas.shape,
                         store_fn=store_fn,
+                        tqdm_list=shared_list,
                     )
-                    # pool.map(multi_fn, [slice(i,i+250) for i in np.arange(0,n_samples, n_samples//parallel)])
                     pool.map(multi_fn, enumerate(array_indices))
-                    # print ("here")
                     self.model_atlas = shared_model_atlas.copy()
                     self.param_vectors = shared_init_params.copy()
 

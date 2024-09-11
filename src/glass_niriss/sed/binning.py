@@ -2,13 +2,18 @@
 Functions to bin data to a specified signal/noise.
 """
 
+from os import PathLike
+from typing import Any
+
 import astropy.visualization as astrovis
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy.io import fits
+from astropy.table import Table
 from numpy.typing import ArrayLike
 from vorbin.voronoi_2d_binning import voronoi_2d_binning
 
-__all__ = ["hexbin", "constrained_adaptive"]
+__all__ = ["hexbin", "constrained_adaptive", "save_binned_data"]
 
 
 def hexbin(
@@ -167,7 +172,7 @@ def constrained_adaptive(
     nbins : int
         The number of bins.
     binned_s_n : ArrayLike
-        A 2D array of the same shape as ``signal``, containing the S/N in
+        A 1D array of length ``nbins``, containing the S/N in
         each bin.
     bin_inv : ArrayLike
         A 2D array performing the inverse binning operation, i.e.
@@ -221,7 +226,7 @@ def constrained_adaptive(
     binned_signal = np.bincount(all_idxs, weights=f_signal)
     binned_noise = np.sqrt(np.bincount(all_idxs, weights=f_noise**2))
 
-    binned_s_n = (binned_signal / binned_noise).reshape(signal.shape)
+    binned_s_n = binned_signal / binned_noise  # [all_inv].reshape(signal.shape)
     bin_labels = all_idxs.reshape(signal.shape)
     bin_inv = all_inv.reshape(signal.shape)
     print(f"Total bins: {len(_all_unq)} (Hex: {num_hex_bins}, Voronoi: {num_vor_bins})")
@@ -278,3 +283,99 @@ def constrained_adaptive(
         plt.show()
 
     return bin_labels, nbins, binned_s_n, bin_inv
+
+
+def save_binned_data(
+    bin_labels: ArrayLike,
+    data_path: PathLike,
+    out_path: PathLike,
+    signal_hdu_idxs: ArrayLike,
+    noise_hdu_idxs: ArrayLike | None = None,
+    var_hdu_idxs: ArrayLike | None = None,
+    crop: tuple | None = None,
+):
+    """
+    Create a binned photometric catalogue from a segmentation map.
+
+    Realistically, this needs to be better thought out. Unlikely that
+    the input will be MEF, highly likely that it'll be combined from
+    multiple single FITS files.
+
+    Parameters
+    ----------
+    bin_labels : ArrayLike
+        A 2D ``int`` array, containing the bin label assigned to each
+        element of the input arrays.
+    data_path : PathLike
+        The multi-extension fits file containing the data to be binned.
+    out_path : PathLike
+        The path to save the output.
+    signal_hdu_idxs : ArrayLike
+        _description_.
+    noise_hdu_idxs : ArrayLike | None, optional
+        _description_, by default None.
+    var_hdu_idxs : ArrayLike | None, optional
+        _description_, by default None.
+    crop : tuple | None, optional
+        _description_, by default None.
+    """
+
+    phot_cat = Table()
+    bin_ids, bin_inv = np.unique(bin_labels, return_inverse=True)
+    phot_cat["bin_id"] = bin_ids.astype(str)
+    phot_cat["bin_area"] = np.bincount(bin_labels.ravel())
+
+    if crop is None:
+        crop = (slice(0, None), slice(0, None))
+
+    with fits.open(data_path) as hdul:
+
+        # hdr = hdul[signal_hdu_idxs[0]].header.copy()
+        # hdr["BIN_CROP"] = str(crop)
+        # hdr["BIN_CROP"] = str(crop)
+        for s in signal_hdu_idxs:
+            try:
+                phot_cat[s] = np.bincount(
+                    bin_labels.ravel(), weights=hdul[s].data[crop].ravel()
+                )
+            except Exception as e:
+                print(e)
+                phot_cat[s] = np.nan
+        if noise_hdu_idxs is not None:
+            for s in noise_hdu_idxs:
+                try:
+                    phot_cat[s] = np.bincount(
+                        bin_labels.ravel(), weights=hdul[s].data[crop].ravel() ** 2
+                    )
+                except Exception as e:
+                    print(e)
+                    phot_cat[s] = np.nan
+        elif var_hdu_idxs is not None:
+            for s in var_hdu_idxs:
+                try:
+                    phot_cat[s] = np.bincount(
+                        bin_labels.ravel(), weights=hdul[s].data[crop].ravel()
+                    )
+                except Exception as e:
+                    print(e)
+                    phot_cat[s] = np.nan
+
+    # if noise_hdu_idxs is not None:
+
+    print(phot_cat)
+
+    # phot
+
+    binned_data = fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(
+                data=bin_labels,
+                # header=signal.header.copy(),
+                name="SEG_MAP",
+            ),
+            fits.BinTableHDU(data=phot_cat, name="PHOT_CAT"),
+        ]
+    )
+
+    binned_data.writeto(out_path)
