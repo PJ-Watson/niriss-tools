@@ -10,10 +10,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
+from astropy.wcs import WCS
 from numpy.typing import ArrayLike
 from vorbin.voronoi_2d_binning import voronoi_2d_binning
 
-__all__ = ["hexbin", "constrained_adaptive", "save_binned_data"]
+__all__ = [
+    "hexbin",
+    "constrained_adaptive",
+    "save_binned_data_arr",
+    "save_binned_data_fits",
+    "bin_and_save",
+]
 
 
 def hexbin(
@@ -117,12 +124,14 @@ def hexbin(
 def constrained_adaptive(
     signal: ArrayLike,
     noise: ArrayLike,
-    bin_diameter: float = 10,
+    bin_diameter: float = 4,
     target_sn: float = 100,
     plot: bool = True,
     quiet: bool = False,
     cvt: bool = True,
     wvt: bool = True,
+    mask: ArrayLike | None = None,
+    use_hex: bool = True,
 ) -> tuple[ArrayLike, int, ArrayLike, ArrayLike]:
     """
     Perform a constrained adaptive binning method to reach a target S/N.
@@ -163,6 +172,13 @@ def constrained_adaptive(
         `Diehl & Statler 2006 \
             <https://ui.adsabs.harvard.edu/abs/2006MNRAS.368..497D>`_.
         By default True.
+    mask : ArrayLike | None, optional
+        Values in the input signal and noise to mask out, i.e. where
+        ``mask==True`` will not be included in the binned data.
+    use_hex : bool, optional
+        Whether to perform the first stage of the binning procedure. If
+        ``False``, then this will be skipped, and only the Voronoi binning
+        procedure will be attempted. By default ``True``.
 
     Returns
     -------
@@ -183,6 +199,12 @@ def constrained_adaptive(
 
     f_signal = signal.ravel()
     f_noise = noise.ravel()
+    if mask is None:
+        f_mask = np.zeros_like(f_noise)
+    else:
+        f_mask = mask.ravel()
+    # plt.imshow(mask)
+    # plt.show()
 
     hex_idxs, hex_bin_n, hex_s_n, hex_inv = hexbin(
         X.ravel(),
@@ -192,11 +214,19 @@ def constrained_adaptive(
         bin_diameter=bin_diameter,
     )
 
+    if not use_hex:
+        print("Skipping hex bin")
+        hex_s_n = np.zeros_like(hex_s_n)
     good_hex_data = (hex_s_n >= target_sn)[hex_inv]
+    if mask is not None:
+        good_hex_data &= ~f_mask
 
     num_hex_bins = len(np.unique(hex_idxs[good_hex_data]))
 
     vorbin_idx = ~good_hex_data & np.isfinite(f_noise) & (f_noise > 0) & (f_signal > 0)
+
+    if mask is not None:
+        vorbin_idx &= ~mask.ravel()
 
     vorbin_output = voronoi_2d_binning(
         x=X.ravel()[vorbin_idx],
@@ -285,7 +315,7 @@ def constrained_adaptive(
     return bin_labels, nbins, binned_s_n, bin_inv
 
 
-def save_binned_data(
+def save_binned_data_arr(
     bin_labels: ArrayLike,
     data_path: PathLike,
     out_path: PathLike,
@@ -311,13 +341,15 @@ def save_binned_data(
     out_path : PathLike
         The path to save the output.
     signal_hdu_idxs : ArrayLike
-        _description_.
+        The indices of the HDUs containing the direct images.
     noise_hdu_idxs : ArrayLike | None, optional
-        _description_, by default None.
+        The indices of the HDUs containing the noise images. One of
+        ``noise_hdu_idxs`` and ``var_hdu_idxs`` must be given.
     var_hdu_idxs : ArrayLike | None, optional
-        _description_, by default None.
+        The indices of the HDUs containing the variance images.
     crop : tuple | None, optional
-        _description_, by default None.
+        A crop to be applied to the images before applying the binning
+        scheme, by default None.
     """
 
     phot_cat = Table()
@@ -330,9 +362,6 @@ def save_binned_data(
 
     with fits.open(data_path) as hdul:
 
-        # hdr = hdul[signal_hdu_idxs[0]].header.copy()
-        # hdr["BIN_CROP"] = str(crop)
-        # hdr["BIN_CROP"] = str(crop)
         for s in signal_hdu_idxs:
             try:
                 phot_cat[s] = np.bincount(
@@ -360,12 +389,6 @@ def save_binned_data(
                     print(e)
                     phot_cat[s] = np.nan
 
-    # if noise_hdu_idxs is not None:
-
-    print(phot_cat)
-
-    # phot
-
     binned_data = fits.HDUList(
         [
             fits.PrimaryHDU(),
@@ -379,3 +402,214 @@ def save_binned_data(
     )
 
     binned_data.writeto(out_path)
+
+
+def save_binned_data_fits(
+    bin_labels: ArrayLike,
+    out_path: PathLike,
+    filter_keys: list,
+    signal_paths: list,
+    var_paths: list,
+    crop: tuple | None = None,
+    header: fits.Header | None = None,
+    overwrite: bool = True,
+) -> None:
+    """
+    Create a binned photometric catalogue from a segmentation map.
+
+    Unlike `~glass_niriss.sed.save_binned_data_arr()`, this uses as input
+    multiple FITS files containing the signal and variance arrays.
+
+    Parameters
+    ----------
+    bin_labels : ArrayLike
+        A 2D ``int`` array, containing the bin label assigned to each
+        element of the input arrays.
+    out_path : PathLike
+        The path to save the output.
+    filter_keys : list
+        The names of the filters corresponding to each of the signal and
+        variance image pairs. These will be used as column names in the
+        photometric catalogue.
+    signal_paths : list
+        A list containing the locations of the direct images.
+    var_paths : list
+        A list containing the locations of the associated variance images.
+    crop : tuple | None, optional
+        A crop to be applied to the images before applying the binning
+        scheme, by default None.
+    header : fits.Header | None = None
+        If supplied, this will be used to generate a header for the
+        segmentation map in the output file. If ``None``, a header will be
+        taken from the first image in ``signal_paths``.
+    overwrite : bool, optional
+        If a catalogue already exists at ``out_path``, this determines if
+        it should be written over. By default ``True``.
+    """
+
+    phot_cat = Table()
+    bin_ids, bin_inv = np.unique(bin_labels, return_inverse=True)
+    phot_cat["bin_id"] = bin_ids.astype(str)
+    phot_cat["bin_area"] = np.bincount(bin_labels.ravel())
+
+    if crop is None:
+        crop = (slice(0, None), slice(0, None))
+
+    for i, (f, s, v) in enumerate(zip(filter_keys, signal_paths, var_paths)):
+        with fits.open(s) as sci_hdul:
+            try:
+                phot_cat[f"{f}_sci".lower()] = np.bincount(
+                    bin_labels.ravel(), weights=sci_hdul[0].data[crop].ravel()
+                )
+                if header is None:
+                    header = sci_hdul[0].header
+                    wcs = WCS(hdr)[crop]
+                    header.update(wcs.to_header())
+
+            except Exception as e:
+                print(e, "blah", f)
+                phot_cat[f"{f}_sci".lower()] = [np.nan] * len(bin_ids)
+        with fits.open(v) as var_hdul:
+            try:
+                phot_cat[f"{f}_var".lower()] = np.bincount(
+                    bin_labels.ravel(), weights=var_hdul[0].data[crop].ravel()
+                )
+            except Exception as e:
+                print(e, "whhy")
+                phot_cat[f"{f}_var".lower()] = np.nan
+
+    binned_data = fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(
+                data=bin_labels,
+                header=header,
+                name="SEG_MAP",
+            ),
+            fits.BinTableHDU(data=phot_cat, name="PHOT_CAT"),
+        ]
+    )
+
+    binned_data.writeto(out_path, overwrite=overwrite)
+
+
+def bin_and_save(
+    obj_id: int,
+    out_dir: PathLike,
+    seg_map: ArrayLike | PathLike,
+    info_dict: dict,
+    sn_filter: str,
+    target_sn: float = 100,
+    use_hex: bool = True,
+    bin_diameter: float = 4,
+    seg_hdu_index: int | str = 0,
+    overwrite: bool = False,
+    **bin_kwargs,
+) -> PathLike:
+    """
+    Rebin and save one object in a segmentation map.
+
+    This is a thin wrapper around other functions in this module, with a
+    slightly opinionated default set of parameters. If the user is
+    familiar with the lower-level functions, those will provide an
+    equivalent output.
+
+    Parameters
+    ----------
+    obj_id : int
+        The unique identifier of an object in the full segmentation map.
+    out_dir : PathLike
+        The directory to which the output will be written, consisting of a
+        segmentation image for the binning scheme, and a photometric
+        catalogue.
+    seg_map : ArrayLike | PathLike
+        The segmentation map identifying the location of objects in the
+        individual images, where pixels with a given unique integer
+        correspond to the extent of a single object. This should have the
+         same alignment and shape as images in ``info_dict``.
+    info_dict : dict
+        A dictionary containing all information on the images to be used
+        when binning and generating the photometric catalogue. The keys of
+        the dictionary should correspond to the names of the filters (or
+        any desired column name in the output catalogue), and each entry
+        should itself contain a ``dict``, with the keys ``sci`` and
+        ``var`` describing the locations of the PSF-matched science and
+        variance images.
+    sn_filter : str
+        The ``info_dict`` key to use when calculating the S/N for binning.
+    target_sn : float, optional
+        The desired S/N in each output bin, by default 100. This is only
+        guaranteed to be achieved for the hexagonal bins (if using this
+        binning scheme), as there is some scatter on the S/N achieved
+        through Voronoi binning.
+    use_hex : bool, optional
+        Whether to perform the first stage of the binning procedure. If
+        ``False``, then this will be skipped, and only the Voronoi binning
+        procedure will be attempted. By default ``True``.
+    bin_diameter : float, optional
+        The minimum diameter of each bin (subject to pixel discretisation
+        effects), by default 4.
+    seg_hdu_index : int | str, optional
+        The index or name of the HDU containing the segmentation map,
+        by default ``0``.
+    overwrite : bool, optional
+        If a catalogue already exists in ``out_dir``, this determines if
+        it should be written over. By default ``False``.
+    **bin_kwargs : dict, optional
+        Any additional parameters to be passed through to
+        `~glass_niriss.sed.constrained_adaptive()`.
+
+    Returns
+    -------
+    PathLike
+        The path to the binned data, saved as a multi-extension FITS file.
+    """
+
+    if isinstance(seg_map, PathLike):
+        seg_map = fits.getdata(seg_map, seg_hdu_index)
+
+    from glass_niriss.pipeline import seg_slice
+
+    obj_img_idxs = seg_slice(seg_map, obj_id)
+
+    signal = fits.getdata(info_dict[sn_filter]["sci"])[obj_img_idxs]
+    signal_hdr = fits.getheader(info_dict[sn_filter]["sci"])
+    signal_wcs = WCS(signal_hdr)[obj_img_idxs]
+    signal_hdr.update(signal_wcs.to_header())
+
+    # Don't forget that the noise is the square root of the variance array
+    noise = np.sqrt(fits.getdata(info_dict[sn_filter]["var"]))[obj_img_idxs]
+
+    bin_labels, nbins, bin_sn, bin_inv = constrained_adaptive(
+        signal=signal,
+        noise=noise,
+        target_sn=target_sn,
+        mask=seg_map[obj_img_idxs] != obj_id,
+        use_hex=use_hex,
+        bin_diameter=bin_diameter,
+        **bin_kwargs,
+    )
+
+    # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
+    binned_name = (
+        f"{obj_id}_{"hexbin" if use_hex else "vorbin"}_{bin_diameter}_{target_sn}"
+    )
+
+    save_path = out_dir / f"{binned_name}_data.fits"
+    if save_path.is_file() and not overwrite:
+        print(
+            f"'{save_path.name}' already exists. Set `overwrite=True` "
+            "if you wish to overwrite this file."
+        )
+    else:
+        save_binned_data_fits(
+            bin_labels=bin_labels,
+            out_path=out_dir / f"{binned_name}_data.fits",
+            filter_keys=[*info_dict.keys()],
+            signal_paths=[info_dict[f]["sci"] for f in info_dict.keys()],
+            var_paths=[info_dict[f]["var"] for f in info_dict.keys()],
+            crop=obj_img_idxs,
+            header=signal_hdr,
+        )
+
+    return save_path

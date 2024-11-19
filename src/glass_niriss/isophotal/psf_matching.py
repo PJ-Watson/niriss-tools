@@ -41,9 +41,9 @@ def match_photutils(
         or a path to a FITS file.
     target_psf : ArrayLike | PathLike
         The target PSF, which should be broader than the source. The shape
-        and pixel scale of `source_psf` and `target_psf` must match.
+        and pixel scale of ``source_psf`` and ``target_psf`` must match.
     out_path : PathLike | None, optional
-        The path to which the output kernel should be saved. If `None`
+        The path to which the output kernel should be saved. If ``None``
         (default), the kernel will not be written to a file.
     window : Callable | None, optional
         The window function to filter high-frequency noise, by default
@@ -52,13 +52,13 @@ def match_photutils(
     oversample : int, optional
         The factor by which the source and target PSF should be
         oversampled before computing the matching kernel, using
-        `scipy.ndimage.zoom()`. By default, `oversample=3`.
+        `scipy.ndimage.zoom()`. By default, ``oversample=3``.
 
     Returns
     -------
     ArrayLike
-        The homogenisation kernel. When convolved with `source_psf`, this
-        should reproduce `target_psf`.
+        The homogenisation kernel. When convolved with ``source_psf``,
+        this should reproduce ``target_psf``.
     """
 
     if isinstance(source_psf, PathLike):
@@ -103,17 +103,17 @@ def match_pypher(
         or a path to a FITS file.
     target_psf : ArrayLike | PathLike
         The target PSF, which should be broader than the source. The shape
-        and pixel scale of `source_psf` and `target_psf` must match.
+        and pixel scale of ``source_psf`` and ``target_psf`` must match.
     out_path : PathLike | None, optional
-        The path to which the output kernel should be saved. If `None`
+        The path to which the output kernel should be saved. If ``None``
         (default), the kernel will not be written to a file.
     pypher_r : float, optional
         The regularisation parameter for the Wiener filter. By default,
-        `pypher_r=3e-3`; for further details see `pypher`.
+        ``pypher_r=3e-3``; for further details see `pypher`.
     oversample : int, optional
         The factor by which the source and target PSF should be
         oversampled before computing the matching kernel, using
-        `scipy.ndimage.zoom()`. By default, `oversample=3`.
+        `scipy.ndimage.zoom()`. By default, ``oversample=3``.
     pixscale : float, optional
         The pixel scale of the input PSFs, by default 0.04.
     tmp_dir : PathLike | None, optional
@@ -124,8 +124,8 @@ def match_pypher(
     Returns
     -------
     ArrayLike
-        The homogenisation kernel. When convolved with `source_psf`, this
-        should reproduce `target_psf`.
+        The homogenisation kernel. When convolved with ``source_psf``,
+        this should reproduce ``target_psf``.
     """
 
     if tmp_dir is None:
@@ -208,42 +208,42 @@ def reproject_and_convolve(
         The locations of one or more images, to be matched to the
         reference image.
     psfs : ArrayLike | PathLike | None | list[ArrayLike | PathLike | None]
-        The corresponding PSF for each image in `orig_image`. If any PSF
-        is `None`, the convolution step will be skipped for that image.
+        The corresponding PSF for each image in ``orig_image``. If any PSF
+        is ``None``, the convolution step will be skipped for that image.
     out_dir : PathLike
         The directory to which the output (reprojected and convolved)
         images will be written.
     psf_target : ArrayLike | PathLike
         The PSF to which all of the input images will be matched. In most
-        circumstances, this will be the PSF of `ref_path`, but it does not
-        need to be (e.g. if matching to the resolution of a ground-based
+        circumstances, this will be the PSF of ``ref_path``, but it does
+         not need to be (e.g. if matching to the resolution of a ground-based
         IFU).
     oversample : int, optional
         The factor by which the source and target PSF should be
         oversampled before computing the matching kernel, using
-        `scipy.ndimage.zoom()`. By default, `oversample=3`.
+        `scipy.ndimage.zoom()`. By default, ``oversample=3``.
     save_unconvolved : bool, optional
         Whether the reprojected (but unconvolved) images should also be
         saved, by default True.
     new_wcs_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `~glass_niriss.isophotal.gen_new_wcs()`, by default `None`.
+        `~glass_niriss.isophotal.gen_new_wcs()`, by default ``None``.
     reproject_image_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `~glass_niriss.isophotal.reproject_image()`, by default `None`.
+        `~glass_niriss.isophotal.reproject_image()`, by default ``None``.
     psf_method : {"pypher" or "photutils"}, optional
         The method used to generate the PSF-matching homogenisation
-        kernel, by default `"pypher"`.
+        kernel, by default ``"pypher"``.
     psf_match_kw : dict | None, optional
         Any additional keyword arguments to pass through to
         `glass_niriss.isophotal.match_photutils()` or
         `glass_niriss.isophotal.match_pypher()`, depending on
-        `psf_method`. By default None.
+        ``psf_method``. By default None.
     convolve_method : {"fft", "direct"}, optional
         The method used to convolve the reprojected images with the
-        homogenisation kernel. By default "fft".
+        homogenisation kernel. By default ``"fft"``.
     new_names : str | list[str] | None, optional
-        The new base names for each original image, by default `None`.
+        The new base names for each original image, by default ``None``.
 
     Returns
     -------
