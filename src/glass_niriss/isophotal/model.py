@@ -7,6 +7,8 @@ from copy import deepcopy
 from pathlib import Path
 
 import astropy.units as u
+import astropy.visualization as astrovis
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma
 from astropy.convolution import convolve
@@ -20,6 +22,8 @@ from photutils.isophote import Ellipse, EllipseGeometry, build_ellipse_model
 from photutils.segmentation import SourceCatalog, SourceFinder, make_2dgaussian_kernel
 
 from glass_niriss.c_utils import build_ellipse_model as fast_build_ellipse_model
+
+__all__ = ["ClusterModels"]
 
 _bcg_attr_warn = (
     "No bCGs have been identified yet. Please run "
@@ -101,6 +105,7 @@ class ClusterModels:
     ):
 
         self.out_dir = Path(output_dir)
+        self.out_dir.mkdir(exist_ok=True, parents=True)
         self.base_name = base_name
 
         self._img_data = self._img_hdr = self._img_wcs = None
@@ -202,6 +207,7 @@ class ClusterModels:
 
         At a minimum, for each object in the segmentation map, this
         catalogue contains:
+
         * Its integer value (`label` or `obj_id`) in the segmentation map.
         * The corners of its rectangular bounding box (`bbox_xmin`,
           `bbox_xmax`, `bbox_ymin`, and `bbox_ymax`).
@@ -209,7 +215,8 @@ class ClusterModels:
           (`xcentroid`, `ycentroid`, `ra`, and `dec`).
         * Its `ellipticity` and `orientation`.
         * Its semimajor and seminor axis lengths (`orientation`,
-        `semimajor_sigma`, and `semiminor_sigma`).
+          `semimajor_sigma`, and `semiminor_sigma`).
+
         """
         if self._seg_cat is None:
             raise AttributeError(
@@ -453,7 +460,7 @@ class ClusterModels:
             threshold *= self._background.background_rms
 
         if "contrast" not in seg_kwargs.keys():
-            seg_kwargs["contrast"] = 0.01
+            seg_kwargs["contrast"] = 0.02
 
         finder = SourceFinder(npixels=npixels, **seg_kwargs)
         segm = finder(convolved_data, threshold=threshold, mask=mask)
@@ -492,7 +499,7 @@ class ClusterModels:
     def cutout_slice(
         self,
         obj_id: int,
-        scale_padding: float | None = 1.5,
+        scale_padding: float | None = 2.0,
         pix_padding: int | None = None,
     ) -> tuple:
         """
@@ -611,8 +618,6 @@ class ClusterModels:
             seg_ids = self._seg_cat["label"][matched]
 
         if plot:
-            import astropy.visualization as astrovis
-            import matplotlib.pyplot as plt
 
             print(self._img_data.shape)
             print(self._seg_map.shape)
@@ -640,7 +645,7 @@ class ClusterModels:
 
         return np.array(seg_ids)
 
-    def model_galaxies(self):
+    def model_galaxies(self, psf=None):
         """
         Model the galaxies in this field.
         """
@@ -693,6 +698,8 @@ class ClusterModels:
             ]
         )
 
+        self.psf = psf
+
         seg_ids = self.match_bcgs()
 
         self._curr_img = deepcopy(self._img_data)
@@ -716,48 +723,55 @@ class ClusterModels:
 
     def _first_iteration(self, gal_ids: ArrayLike):
 
-        for gal_id in gal_ids:
-            try:
-                cutout_idxs, (y0, x0) = self.cutout_slice(obj_id=gal_id)
-                fit_kwargs = {"fflag": 0.5}
-                model, iso = self._model_galaxy(
-                    self._curr_img[cutout_idxs]
-                    - self._background.background[cutout_idxs],
-                    mask=((self._seg_map > 0) & (self._seg_map != gal_id))[cutout_idxs],
-                    x0=x0,
-                    y0=y0,
-                    sma=10,
-                    plot=False,
-                    **fit_kwargs,
-                )
+        for gal_id in gal_ids[:]:
+            # try:
+            cutout_idxs, (y0, x0) = self.cutout_slice(obj_id=gal_id)
+            fit_kwargs = {"fflag": 0.5}
+            # plot_test = self._curr_img[cutout_idxs]- self._background.background[cutout_idxs]
+            # plot_test[((self._seg_map > 0) & (self._seg_map != gal_id))[cutout_idxs]] = np.nan
+            # plt.imshow(plot_test,
+            # norm=astrovis.ImageNormalize(plot_test, interval=astrovis.PercentileInterval(99.9), stretch=astrovis.LogStretch())
+            #     )
+            # plt.scatter(x0,y0,c="red")
+            # plt.show()
+            model, iso = self._model_galaxy(
+                self._curr_img[cutout_idxs] - self._background.background[cutout_idxs],
+                mask=((self._seg_map > 0) & (self._seg_map != gal_id))[cutout_idxs],
+                x0=x0,
+                y0=y0,
+                sma=10,
+                plot=False,
+                psf=self.psf,
+                **fit_kwargs,
+            )
 
-                self._curr_img[cutout_idxs] -= model
-            except Exception as e:
-                print(gal_id, e)
+            self._curr_img[cutout_idxs] -= model
+            # except Exception as e:
+            #     print(gal_id, e)
 
-            if gal_id == gal_ids[10]:
-                import astropy.visualization as astrovis
-                import matplotlib.pyplot as plt
+            # if gal_id == gal_ids[10]:
 
-                norm = astrovis.ImageNormalize(
-                    data=self._curr_img,
-                    # stretch=astrovis.
-                    stretch=astrovis.LogStretch(),
-                    interval=astrovis.PercentileInterval(99.9),
-                    # interval=astrovis.ManualInterval(-0.1, 50),
-                )
-                fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
-                axs[0, 0].imshow(self._img_data, norm=norm, origin="lower")
-                axs[0, 1].imshow(
-                    self._img_data - self._background.background,
-                    norm=norm,
-                    origin="lower",
-                )
-                axs[1, 0].imshow(
-                    self._img_data - self._curr_img, norm=norm, origin="lower"
-                )
-                axs[1, 1].imshow(self._curr_img, norm=norm, origin="lower")
-                plt.show()
+            norm = astrovis.ImageNormalize(
+                data=self._curr_img,
+                # stretch=astrovis.
+                stretch=astrovis.LogStretch(),
+                interval=astrovis.PercentileInterval(99.9),
+                # interval=astrovis.ManualInterval(-0.1, 50),
+            )
+            fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+            axs[0, 0].imshow(self._img_data[cutout_idxs], norm=norm, origin="lower")
+            axs[0, 1].imshow(
+                self._img_data[cutout_idxs] - self._background.background[cutout_idxs],
+                norm=norm,
+                origin="lower",
+            )
+            axs[1, 0].imshow(
+                self._img_data[cutout_idxs] - self._curr_img[cutout_idxs],
+                norm=norm,
+                origin="lower",
+            )
+            axs[1, 1].imshow(self._curr_img[cutout_idxs], norm=norm, origin="lower")
+            plt.show()
 
     @staticmethod
     def _model_galaxy(
@@ -771,8 +785,26 @@ class ClusterModels:
         recentre: bool = False,
         plot: bool = False,
         nthreads: int = 8,
+        psf=None,
         **fit_kwargs,
     ):
+
+        if psf is not None:
+            from skimage import restoration
+
+            fig, axs = plt.subplots(1, 2)
+            norm = astrovis.ImageNormalize(
+                data=cutout,
+                # stretch=astrovis.
+                stretch=astrovis.LogStretch(),
+                interval=astrovis.PercentileInterval(99.9),
+                # interval=astrovis.ManualInterval(-0.1, 50),
+            )
+            axs[0].imshow(cutout, norm=norm)
+            # cutout[cutout<0] = 0
+            cutout = restoration.richardson_lucy(cutout, psf, clip=False)
+            axs[1].imshow(cutout, norm=norm)
+            plt.show()
 
         data = ma.masked_array(cutout, mask)
 
@@ -801,12 +833,12 @@ class ClusterModels:
         model_image = fast_build_ellipse_model(
             data.shape, isolist, high_harmonics=True, nthreads=nthreads
         )
+        if psf is not None:
+            model_image = convolve(model_image, psf)
         # np.testing.assert_allclose(model_image2, model_image)
         # model_image = build_ellipse_model(data.shape, isolist, high_harmonics=True, nthreads=8)
 
         if plot:
-            import astropy.visualization as astrovis
-            import matplotlib.pyplot as plt
 
             residual = cutout - model_image
 

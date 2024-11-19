@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "astropy>=6.1",
-    "numpy>=2.0",
+    "numpy>=1.26.0",
     "matplotlib>=3.9",
     # "tqdm>=4.66",
     "scipy>=1.13",
@@ -37,6 +37,7 @@ docs = [
     "sphinx>=8.0",
     "numpydoc>=1.8",
     "furo>=2024.08",
+    "sphinx-automodapi>=0.17"
 ]
 grizli = [
     "grizli[jwst]"

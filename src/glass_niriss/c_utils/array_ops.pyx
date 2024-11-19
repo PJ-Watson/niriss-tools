@@ -13,7 +13,7 @@ np.import_array()
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
 
-from libc.math cimport pow
+from libc.math cimport fabs, pow, sqrt
 
 
 @cython.boundscheck(False)
@@ -56,3 +56,52 @@ def calc_chisq(
             chisq[i] += pow(models[i,j]-obs[j], 2)*inv_sig_sq[j]
 
     return np.asarray(chisq)
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def assign_hex(
+    DTYPE_t[:,::1] hex_centres,
+    DTYPE_t diameter,
+    tuple[int, int] shape,
+):
+
+    cdef size_t i, j, k, K
+    K = hex_centres.shape[0]
+    # J = signal.shape[1]
+    cdef DTYPE_t radius = diameter * 0.5
+    cdef DTYPE_t short_radius = 0.5*sqrt(3)*radius
+
+    cdef np.int32_t[:,::1] labels = np.zeros(shape, dtype=np.int32)
+
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            # hex_centres[i,j]
+            for k in range(K):
+                # print (i,j,k)
+                # if k==0:
+                # if j>=(hex_centres[k][0]-short_radius) and j<(hex_centres[k][0]+short_radius) and i>=(hex_centres[k][1]-radius) and i<(hex_centres[k][1]+radius):
+
+                #     print (i, j, k, (hex_centres[k][0]-short_radius), (hex_centres[k][1]-radius),
+                #         j>=(hex_centres[k][0]-short_radius),
+                #         j<(hex_centres[k][0]+short_radius),
+                #         i>=(hex_centres[k][1]-radius),
+                #         i<(hex_centres[k][1]+radius),
+                #         fabs(i-hex_centres[k][1]) < sqrt(3) * min(radius - fabs(j-hex_centres[k][0]), radius*0.5)
+                #     )
+                # print (
+                #     i,
+                #     j,
+                #     k,
+                #     hex_centres[k][1], hex_centres[k][0],
+                #     fabs(i-hex_centres[k][1]),
+                #     min(radius - fabs(j-hex_centres[k][0]), radius*0.5),
+                # )
+                # if nearly_less_equal(fabs(j-hex_centres[k][0]), sqrt(3) * min(radius - fabs(i-hex_centres[k][1]), radius*0.5)):
+                if (fabs(j-hex_centres[k][0]) <= sqrt(3) * min(radius - fabs(i-hex_centres[k][1]), radius*0.5)):
+                    labels[i][j]=k+1
+                    break
+    # for i in range(6):
+    #     labels[0][i] = 21
+
+    return np.asarray(labels)

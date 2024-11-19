@@ -10,10 +10,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
+from astropy.wcs import WCS
 from numpy.typing import ArrayLike
 from vorbin.voronoi_2d_binning import voronoi_2d_binning
 
-__all__ = ["hexbin", "constrained_adaptive", "save_binned_data"]
+__all__ = ["hexbin", "constrained_adaptive", "save_binned_data", "bin_and_save"]
 
 
 def hexbin(
@@ -123,6 +124,8 @@ def constrained_adaptive(
     quiet: bool = False,
     cvt: bool = True,
     wvt: bool = True,
+    mask: ArrayLike | None = None,
+    use_hex: bool = True,
 ) -> tuple[ArrayLike, int, ArrayLike, ArrayLike]:
     """
     Perform a constrained adaptive binning method to reach a target S/N.
@@ -183,6 +186,12 @@ def constrained_adaptive(
 
     f_signal = signal.ravel()
     f_noise = noise.ravel()
+    if mask is None:
+        f_mask = np.zeros_like(f_noise)
+    else:
+        f_mask = mask.ravel()
+    # plt.imshow(mask)
+    # plt.show()
 
     hex_idxs, hex_bin_n, hex_s_n, hex_inv = hexbin(
         X.ravel(),
@@ -192,11 +201,22 @@ def constrained_adaptive(
         bin_diameter=bin_diameter,
     )
 
+    if not use_hex:
+        print("Skipping hex")
+        hex_s_n = np.zeros_like(hex_s_n)
     good_hex_data = (hex_s_n >= target_sn)[hex_inv]
+    if mask is not None:
+        good_hex_data &= ~f_mask
+
+    # print (good_hex_data.shape, mask.shape)
+    # exit()
 
     num_hex_bins = len(np.unique(hex_idxs[good_hex_data]))
 
     vorbin_idx = ~good_hex_data & np.isfinite(f_noise) & (f_noise > 0) & (f_signal > 0)
+
+    if mask is not None:
+        vorbin_idx &= ~mask.ravel()
 
     vorbin_output = voronoi_2d_binning(
         x=X.ravel()[vorbin_idx],
@@ -285,7 +305,7 @@ def constrained_adaptive(
     return bin_labels, nbins, binned_s_n, bin_inv
 
 
-def save_binned_data(
+def save_binned_data_arr(
     bin_labels: ArrayLike,
     data_path: PathLike,
     out_path: PathLike,
@@ -379,3 +399,205 @@ def save_binned_data(
     )
 
     binned_data.writeto(out_path)
+
+
+def save_binned_data(
+    bin_labels: ArrayLike,
+    out_path: PathLike,
+    filter_keys: list,
+    signal_paths: list,
+    var_paths: list,
+    crop: tuple | None = None,
+    header: fits.Header | None = None,
+    overwrite: bool = True,
+):
+    """
+    Create a binned photometric catalogue from a segmentation map.
+
+    Realistically, this needs to be better thought out. Unlikely that
+    the input will be MEF, highly likely that it'll be combined from
+    multiple single FITS files.
+
+    Parameters
+    ----------
+    bin_labels : ArrayLike
+        A 2D ``int`` array, containing the bin label assigned to each
+        element of the input arrays.
+    data_path : PathLike
+        The multi-extension fits file containing the data to be binned.
+    out_path : PathLike
+        The path to save the output.
+    signal_hdu_idxs : ArrayLike
+        _description_.
+    noise_hdu_idxs : ArrayLike | None, optional
+        _description_, by default None.
+    var_hdu_idxs : ArrayLike | None, optional
+        _description_, by default None.
+    crop : tuple | None, optional
+        _description_, by default None.
+    """
+
+    phot_cat = Table()
+    bin_ids, bin_inv = np.unique(bin_labels, return_inverse=True)
+    phot_cat["bin_id"] = bin_ids.astype(str)
+    phot_cat["bin_area"] = np.bincount(bin_labels.ravel())
+
+    if crop is None:
+        crop = (slice(0, None), slice(0, None))
+
+    # with fits.open(data_path) as hdul:
+
+    # hdr = hdul[signal_hdu_idxs[0]].header.copy()
+    # hdr["BIN_CROP"] = str(crop)
+    # hdr["BIN_CROP"] = str(crop)
+    # for k, info in obs_info:
+    #     print (k)
+
+    for i, (f, s, v) in enumerate(zip(filter_keys, signal_paths, var_paths)):
+        with fits.open(s) as sci_hdul:
+            try:
+                phot_cat[f"{f}_sci".lower()] = np.bincount(
+                    bin_labels.ravel(), weights=sci_hdul[0].data[crop].ravel()
+                )
+                if header is None:
+                    header = sci_hdul[0].header
+                    wcs = WCS(hdr)[crop]
+                    header.update(wcs.to_header())
+
+                    # hdr = sci_hdul[0].data[crop]
+            except Exception as e:
+                print(e, "blah", f)
+                phot_cat[f"{f}_sci".lower()] = [np.nan] * len(bin_ids)
+        with fits.open(v) as var_hdul:
+            try:
+                phot_cat[f"{f}_var".lower()] = np.bincount(
+                    bin_labels.ravel(), weights=var_hdul[0].data[crop].ravel()
+                )
+            except Exception as e:
+                print(e, "whhy")
+                phot_cat[f"{f}_var".lower()] = np.nan
+
+    # for s in signal_paths:
+    #     try:
+    #         phot_cat[s] = np.bincount(
+    #             bin_labels.ravel(), weights=hdul[s].data[crop].ravel()
+    #         )
+    #     except Exception as e:
+    #         print(e)
+    #         phot_cat[s] = np.nan
+    # if noise_hdu_idxs is not None:
+    #     for s in noise_hdu_idxs:
+    #         try:
+    #             phot_cat[s] = np.bincount(
+    #                 bin_labels.ravel(), weights=hdul[s].data[crop].ravel() ** 2
+    #             )
+    #         except Exception as e:
+    #             print(e)
+    #             phot_cat[s] = np.nan
+    # elif var_hdu_idxs is not None:
+    #     for s in var_hdu_idxs:
+    #         try:
+    #             phot_cat[s] = np.bincount(
+    #                 bin_labels.ravel(), weights=hdul[s].data[crop].ravel()
+    #             )
+    #         except Exception as e:
+    #             print(e)
+    #             phot_cat[s] = np.nan
+
+    # # if noise_hdu_idxs is not None:
+
+    print(phot_cat)
+
+    # # phot
+
+    binned_data = fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(
+                data=bin_labels,
+                header=header,
+                name="SEG_MAP",
+            ),
+            fits.BinTableHDU(data=phot_cat, name="PHOT_CAT"),
+        ]
+    )
+
+    binned_data.writeto(out_path, overwrite=overwrite)
+
+
+def bin_and_save(
+    obj_id: int,
+    out_dir: PathLike,
+    seg_map: ArrayLike | PathLike,
+    info_dict: dict,
+    sn_filter: str,
+    target_sn: float = 100,
+    use_hex: bool = False,
+    bin_diameter: float = 4,
+    seg_hdu_index: int | str = 0,
+    overwrite: bool = False,
+    **bin_kwargs,
+):
+    if isinstance(seg_map, PathLike):
+        seg_map = fits.getdata(seg_map, seg_hdu_index)
+
+    from glass_niriss.pipeline import seg_slice
+
+    obj_img_idxs = seg_slice(seg_map, obj_id)
+
+    # with fits.open(
+    #     info_dict[sn_filter]["sci"]
+    # ) as img_hdul:
+
+    #     norm = astrovis.ImageNormalize(
+    #         img_hdul[0].data[obj_img_idxs],
+    #         interval=astrovis.PercentileInterval(99.9),
+    #         stretch=astrovis.LogStretch(),
+    #     )
+
+    #     fig, axs = plt.subplots(1, 2, sharex=True, sharey=True)
+    #     axs[0].imshow(repr_seg_map[obj_img_idxs]%13)
+    #     axs[1].imshow(img_hdul[0].data[obj_img_idxs], norm=norm, origin="lower", cmap="plasma")
+    #     plt.show()
+
+    signal = fits.getdata(info_dict[sn_filter]["sci"])[obj_img_idxs]
+    signal_hdr = fits.getheader(info_dict[sn_filter]["sci"])
+    signal_wcs = WCS(signal_hdr)[obj_img_idxs]
+    signal_hdr.update(signal_wcs.to_header())
+
+    # Don't forget that the noise is the square root of the variance array
+    noise = np.sqrt(fits.getdata(info_dict[sn_filter]["var"]))[obj_img_idxs]
+
+    bin_labels, nbins, bin_sn, bin_inv = constrained_adaptive(
+        signal=signal,
+        noise=noise,
+        target_sn=target_sn,
+        mask=seg_map[obj_img_idxs] != obj_id,
+        use_hex=use_hex,
+        bin_diameter=bin_diameter,
+        **bin_kwargs,
+    )
+
+    # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
+    binned_name = (
+        f"{obj_id}_{"hexbin" if use_hex else "vorbin"}_{bin_diameter}_{target_sn}"
+    )
+
+    save_path = out_dir / f"{binned_name}_data.fits"
+    if save_path.is_file() and not overwrite:
+        print(
+            f"'{save_path.name}' already exists. Set `overwrite=True` "
+            "if you wish to overwrite this file."
+        )
+    else:
+        save_binned_data(
+            bin_labels=bin_labels,
+            out_path=out_dir / f"{binned_name}_data.fits",
+            filter_keys=[*info_dict.keys()],
+            signal_paths=[info_dict[f]["sci"] for f in info_dict.keys()],
+            var_paths=[info_dict[f]["var"] for f in info_dict.keys()],
+            crop=obj_img_idxs,
+            header=signal_hdr,
+        )
+
+    return save_path
