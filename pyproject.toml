@@ -36,7 +36,6 @@ docs = [
     "sphinx-copybutton>=0.5",
     "sphinx>=8.0",
     "numpydoc>=1.8",
-    "furo>=2024.08",
 ]
 grizli = [
     "grizli[jwst]"

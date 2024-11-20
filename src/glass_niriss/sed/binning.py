@@ -417,7 +417,7 @@ def save_binned_data_fits(
     """
     Create a binned photometric catalogue from a segmentation map.
 
-    Unlike `~glass_niriss.sed.save_binned_data_arr()`, this uses as input
+    Unlike `~glass_niriss.sed.save_binned_data_arr`, this uses as input
     multiple FITS files containing the signal and variance arrays.
 
     Parameters
@@ -557,7 +557,7 @@ def bin_and_save(
         it should be written over. By default ``False``.
     **bin_kwargs : dict, optional
         Any additional parameters to be passed through to
-        `~glass_niriss.sed.constrained_adaptive()`.
+        `~glass_niriss.sed.constrained_adaptive`.
 
     Returns
     -------

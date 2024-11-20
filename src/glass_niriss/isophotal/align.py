@@ -2,8 +2,8 @@
 A module to handle alignment and reprojection of ancillary images.
 """
 
-import os
 from copy import deepcopy
+from os import PathLike
 from pathlib import Path
 
 import astropy.units as u
@@ -26,7 +26,7 @@ __all__ = [
 
 
 def gen_new_wcs(
-    ref_path: os.PathLike,
+    ref_path: PathLike,
     ref_hdu_index: int = 0,
     resolution: float | u.Quantity = 0.04,
     padding: int | tuple[int, int] = 100,
@@ -40,7 +40,7 @@ def gen_new_wcs(
 
     Parameters
     ----------
-    ref_path : os.PathLike
+    ref_path : PathLike
         The path of the reference image, to which all other images will be
         cropped.
     ref_hdu_index : int, optional
@@ -97,7 +97,7 @@ def pc_to_cd(
 
     `astropy.wcs.WCS` recognises CD keywords as input but converts them
     and works internally with the PC matrix.
-    `~astropy.wcs.WCS.to_header()` returns the PC matrix even if the input
+    `~astropy.wcs.WCS.to_header` returns the PC matrix even if the input
     was a CD matrix. This can cause problems if used to update an existing
     header with a CD matrix, so we convert between the two.
 
@@ -142,7 +142,7 @@ def pad_wcs(
     """
     Add padding to all relevant WCS keywords.
 
-    Adapted from `grizli.model.ImageData.add_padding_to_wcs()`, with
+    Adapted from `grizli.model.ImageData.add_padding_to_wcs`, with
     minor modifications to avoid slicing attributes of
     `~astropy.wcs.Wcsprm`, and allowing for symmetrical padding.
 
@@ -209,15 +209,15 @@ def pad_wcs(
 
 
 def calc_full_var(
-    sci_path: os.PathLike,
-    wht_path: os.PathLike,
-    exp_path: os.PathLike,
+    sci_path: PathLike,
+    wht_path: PathLike,
+    exp_path: PathLike,
     sci_hdu_index: int = 0,
     wht_hdu_index: int = 0,
     exp_hdu_index: int = 0,
     compress: bool = True,
     overwrite: bool = False,
-) -> os.PathLike:
+) -> PathLike:
     """
     Calculate the full variance array from "sci", "wht", and "exp" images.
 
@@ -227,12 +227,12 @@ def calc_full_var(
 
     Parameters
     ----------
-    sci_path : `~os.PathLike`
+    sci_path : PathLike
         The path of the science image, containing the measured fluxes.
-    wht_path : `~os.PathLike`
+    wht_path : PathLike
         The path of the weight image, containing the inverse variance from
         the sky and read noise.
-    exp_path : `~os.PathLike`
+    exp_path : PathLike
         The path of the exposure image, containing the exposure time map.
     sci_hdu_index : int, optional
         The index of the HDU containing the science image, by default 0.
@@ -249,7 +249,7 @@ def calc_full_var(
 
     Returns
     -------
-    `~os.PathLike`
+    PathLike
         The path of the new variance array.
     """
 
@@ -351,8 +351,8 @@ def calc_full_var(
 
 
 def reproject_image(
-    input_path: os.PathLike,
-    output_path: os.PathLike,
+    input_path: PathLike,
+    output_path: PathLike,
     output_wcs: WCS,
     output_shape: tuple[int, int],
     input_hdu_index: int = 0,
@@ -363,20 +363,20 @@ def reproject_image(
     prefix: str = "repr_",
     preliminary_buffer: int | None = 250,
     **reproject_kwargs,
-) -> os.PathLike:
+) -> PathLike:
     """
     Reproject an image to a new WCS.
 
     A wrapper around `reproject`, for file handling and default
-    parameters. If `~reproject.reproject_adaptive()` is used as the
-    method, the flux is conserved by default (`conserve_flux=True`). For
+    parameters. If `~reproject.reproject_adaptive` is used as the
+    method, the flux is conserved by default (``conserve_flux=True``). For
     other methods, the input is assumed to be in surface brightness units.
 
     Parameters
     ----------
-    input_path : `~os.PathLike`
+    input_path : PathLike
         The path of the original image.
-    output_path : `~os.PathLike`
+    output_path : PathLike
         The path of the output file. If a directory is passed, the output
         filename will be the same as the input, with the addition of
         ``prefix``.
@@ -387,18 +387,18 @@ def reproject_image(
     input_hdu_index : int, optional
         The index of the HDU containing the input image, by default 0.
     method : {"interp", "adaptive", "exact"}
-        The reprojection method to use, by default "adaptive".
+        The reprojection method to use, by default ``"adaptive"``.
     conserve_flux : bool, optional
         If True (default), the input flux will be conserved. This will
-        only work if `method="adaptive"`.
+        only work if ``method="adaptive"``.
     compress : bool, optional
         If True (default), the output file will be compressed and saved
         with the extension ".fits.gz".
     overwrite : bool, optional
         Overwrite the file if it exists already, by default False.
     prefix : str, optional
-        The string to prepend to the output filename, by default `repr_`.
-        Only used if ``output_path`` is a directory.
+        The string to prepend to the output filename, by default
+        ``"repr_"``. Only used if ``output_path`` is a directory.
     preliminary_buffer : int | None, optional
         For very large images, perform a rough initial crop, padded by
         ``preliminary_buffer``, before the full reprojection. By default,
@@ -408,13 +408,13 @@ def reproject_image(
 
     Returns
     -------
-    `~os.PathLike`
+    PathLike
         The path of the reprojected image.
 
     Raises
     ------
     ValueError
-        An error will be raised if the `method` argument is not valid.
+        An error will be raised if the ``method`` argument is not valid.
 
     Notes
     -----

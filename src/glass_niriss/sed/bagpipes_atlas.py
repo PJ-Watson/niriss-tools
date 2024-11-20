@@ -85,11 +85,11 @@ class AtlasGenerator:
         angstrom, but it can also be set to “mujy” for microjanskys.
     phot_units : str, optional
         The units of the input photometry, which defaults to microjanskys,
-        ``“mujy”``. The photometry will be converted to ``"ergscma"` by
+        ``"mujy"``. The photometry will be converted to ``"ergscma"`` by
         default within the class (see ``out_units``).
     index_list : list | None, optional
         A list of ``dict`` containining definitions for spectral indices,
-        by default `None``.
+        by default ``None``.
 
     Attributes
     ----------

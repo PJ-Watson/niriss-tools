@@ -48,11 +48,11 @@ def match_photutils(
     window : Callable | None, optional
         The window function to filter high-frequency noise, by default
         `~photutils.psf.matching.CosineBellWindow(0.5)`. For further
-        details see `~photutils.psf.create_matching_kernel()`.
+        details see `~photutils.psf.create_matching_kernel`.
     oversample : int, optional
         The factor by which the source and target PSF should be
         oversampled before computing the matching kernel, using
-        `scipy.ndimage.zoom()`. By default, ``oversample=3``.
+        `scipy.ndimage.zoom`. By default, ``oversample=3``.
 
     Returns
     -------
@@ -113,7 +113,7 @@ def match_pypher(
     oversample : int, optional
         The factor by which the source and target PSF should be
         oversampled before computing the matching kernel, using
-        `scipy.ndimage.zoom()`. By default, ``oversample=3``.
+        `scipy.ndimage.zoom`. By default, ``oversample=3``.
     pixscale : float, optional
         The pixel scale of the input PSFs, by default 0.04.
     tmp_dir : PathLike | None, optional
@@ -216,28 +216,28 @@ def reproject_and_convolve(
     psf_target : ArrayLike | PathLike
         The PSF to which all of the input images will be matched. In most
         circumstances, this will be the PSF of ``ref_path``, but it does
-         not need to be (e.g. if matching to the resolution of a ground-based
+        not need to be (e.g. if matching to the resolution of a ground-based
         IFU).
     oversample : int, optional
         The factor by which the source and target PSF should be
-        oversampled before computing the matching kernel, using
-        `scipy.ndimage.zoom()`. By default, ``oversample=3``.
+        oversampled before computing the matching kernel,
+        using `scipy.ndimage.zoom`. By default, ``oversample=3``.
     save_unconvolved : bool, optional
         Whether the reprojected (but unconvolved) images should also be
         saved, by default True.
     new_wcs_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `~glass_niriss.isophotal.gen_new_wcs()`, by default ``None``.
+        `~glass_niriss.isophotal.gen_new_wcs`, by default ``None``.
     reproject_image_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `~glass_niriss.isophotal.reproject_image()`, by default ``None``.
+        `~glass_niriss.isophotal.reproject_image`, by default ``None``.
     psf_method : {"pypher" or "photutils"}, optional
         The method used to generate the PSF-matching homogenisation
         kernel, by default ``"pypher"``.
     psf_match_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `glass_niriss.isophotal.match_photutils()` or
-        `glass_niriss.isophotal.match_pypher()`, depending on
+        `glass_niriss.isophotal.match_photutils` or
+        `glass_niriss.isophotal.match_pypher`, depending on
         ``psf_method``. By default None.
     convolve_method : {"fft", "direct"}, optional
         The method used to convolve the reprojected images with the

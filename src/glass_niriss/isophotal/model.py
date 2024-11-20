@@ -202,14 +202,15 @@ class ClusterModels:
 
         At a minimum, for each object in the segmentation map, this
         catalogue contains:
-        * Its integer value (`label` or `obj_id`) in the segmentation map.
-        * The corners of its rectangular bounding box (`bbox_xmin`,
-          `bbox_xmax`, `bbox_ymin`, and `bbox_ymax`).
+
+        * Its integer value (``label`` or ``obj_id``) in the segmentation map.
+        * The corners of its rectangular bounding box (``bbox_xmin``,
+          ``bbox_xmax``, ``bbox_ymin``, and ``bbox_ymax``).
         * The location of its centre in both pixel and world coordinates
-          (`xcentroid`, `ycentroid`, `ra`, and `dec`).
-        * Its `ellipticity` and `orientation`.
-        * Its semimajor and seminor axis lengths (`orientation`,
-        `semimajor_sigma`, and `semiminor_sigma`).
+          (``xcentroid``, ``ycentroid``, ``ra``, and ``dec``).
+        * Its ``ellipticity`` and ``orientation``.
+        * Its semimajor and seminor axis lengths (``orientation``,
+          ``semimajor_sigma``, and ``semiminor_sigma``).
         """
         if self._seg_cat is None:
             raise AttributeError(
@@ -226,13 +227,13 @@ class ClusterModels:
         The WCS pertaining to the segmentation map.
 
         If the segmentation map was loaded, rather than generated using
-        `ClusterModels.gen_segmentation()`, this is checked for
+        `ClusterModels.gen_segmentation`, this is checked for
         equivalency with `img_wcs`.
         """
         if self._seg_wcs is None:
             raise AttributeError(
                 "No segmentation map has been loaded. Please run "
-                "`ClusterModels.load_segmentation()` to initialise the "
+                "`ClusterModels.load_segmentation` to initialise the "
                 "`seg_wcs` attribute.",
                 name=None,
             )
