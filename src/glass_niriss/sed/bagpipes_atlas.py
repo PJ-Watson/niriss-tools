@@ -610,19 +610,21 @@ class AtlasFitter:
         The location to which all output files will be saved. This will be
         created if it does not already exist.
     seed : int | None, optional
-        The seed for the random sampling, by default 2744. If None,
+        The seed for the random sampling, by default 2744. If ``None``,
         then a new seed will be generated each time this method is
         called.
+    overwrite : bool, optional
+        If ``True``, then any existing posterior distributions and output
+        catalogues will be overwritten. By default ``False``.
     """
 
     def __init__(
         self,
-        # galaxy,
         fit_instructions: dict,
         atlas_path: PathLike,
         out_path: PathLike,
-        # run : str = ".",
         seed: int | None = 2744,
+        overwrite: bool = False,
     ):
 
         self.run = "."
@@ -633,6 +635,8 @@ class AtlasFitter:
         self.out_path = Path(out_path)
 
         self._process_fit_instructions()
+
+        self.overwrite = overwrite
 
         # # If a posterior file already exists load it.
         if Path(atlas_path).exists():
@@ -780,7 +784,6 @@ class AtlasFitter:
             inv_sigma_sq_ind = 1.0 / galaxy.indices[:, 1] ** 2
 
         # diff = (self.model_atlas - galaxy.photometry[:, 1]) ** 2
-        from sys import getsizeof
 
         # chisq_arr = np.nansum(
         #     (self.model_atlas - galaxy.photometry[:, 1]) ** 2 * inv_sigma_sq_phot,
@@ -798,15 +801,25 @@ class AtlasFitter:
         param2d.append(lnlike_oned)
         param2d = np.column_stack(param2d)
 
+        chisq_arr /= self.ndim
+
         weights = np.exp(-0.5 * chisq_arr) / np.nansum(np.exp(-0.5 * chisq_arr))
         finite_weights = np.isfinite(weights)
 
+        # import matplotlib.pyplot as plt
+        # print (self.params)
+        # # plt.scatter(self.param_samples["continuity:massformed"], chisq_arr/self.ndim)
+        # # plt.ylim((0,1e3))
+        # plt.scatter(self.param_samples["continuity:massformed"], weights)
+        # plt.show()
+        # exit()
+
         if np.nansum(finite_weights) == 0:
-            samples2d = np.zeros((self.n_posterior * 5, param2d.shape[1]))
+            samples2d = np.zeros((self.n_posterior, param2d.shape[1]))
         else:
             samples2d = self.rng.choice(
                 param2d[finite_weights],
-                self.n_posterior * 5,
+                self.n_posterior,
                 p=weights[finite_weights],
             )
 
@@ -1090,6 +1103,9 @@ class AtlasFitter:
         (self.out_path / "pipes" / "posterior" / self.run).mkdir(
             exist_ok=True, parents=True
         )
+        if self.overwrite:
+            for file in (self.out_path / "pipes" / "posterior" / self.run).iterdir():
+                file.unlink()
 
         self._setup_vars()
         col_names = self._setup_colnames()
@@ -1125,3 +1141,5 @@ class AtlasFitter:
                 # data=pool.map_async(self._fit_object, tqdm(IDs)),
                 data=fit_data.get(),
             )
+
+        self.cat.write(self.out_path / f"{self.run}.fits", overwrite=self.overwrite)
