@@ -526,7 +526,7 @@ def bin_and_save(
         The segmentation map identifying the location of objects in the
         individual images, where pixels with a given unique integer
         correspond to the extent of a single object. This should have the
-         same alignment and shape as images in ``info_dict``.
+        same alignment and shape as images in ``info_dict``.
     info_dict : dict
         A dictionary containing all information on the images to be used
         when binning and generating the photometric catalogue. The keys of

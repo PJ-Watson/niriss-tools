@@ -21,6 +21,8 @@ from photutils.segmentation import SourceCatalog, SourceFinder, make_2dgaussian_
 
 from glass_niriss.c_utils import build_ellipse_model as fast_build_ellipse_model
 
+__all__ = ["ClusterModels"]
+
 _bcg_attr_warn = (
     "No bCGs have been identified yet. Please run "
     "`ClusterModels.load_bcg_catalogue()` to specify the galaxies "

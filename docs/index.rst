@@ -18,3 +18,4 @@ documentation for details.
    isophotal/index
    sed/index
    c_utils/index
+   grism/index
