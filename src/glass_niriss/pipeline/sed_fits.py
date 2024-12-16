@@ -257,7 +257,34 @@ def generate_fit_params(
     z_range: float = 0.01,
     num_age_bins: int = 5,
     min_age_bin: float = 30,
-):
+) -> dict:
+    """
+    Generates a dictionary of fit parameters for Bagpipes.
+
+    This uses the Leja+19 continuity SFH.
+
+    Parameters
+    ----------
+    obj_z : float | ArrayLike
+        The estimated redshift of the object. If a scalar value is passed,
+        and ``z_range==0.0``, the object will be fit to a single redshift
+        value. If ``z_range!=0.0``, this will be the centre of the
+        redshift window. If an array is passed, this explicity sets the
+        redshift range to use for fitting.
+    z_range : float, optional
+        The range to use for fitting the redshift, assuming a flat
+        (uniform) prior, by default 0.01.
+    num_age_bins : int, optional
+        The number of age bins to use for the SFH, by default 5.
+    min_age_bin : float, optional
+        The minimum age to use for the continuity SFH in Myr, i.e. the
+        first bin will range from ``(0,min_age_bin)``. By default 30.
+
+    Returns
+    -------
+    dict
+        The bagpipes formatted fit parameters.
+    """
 
     fit_params = {}
     if (z_range == 0.0) or (type(obj_z) is ArrayLike):
