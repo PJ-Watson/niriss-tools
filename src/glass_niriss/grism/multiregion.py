@@ -827,7 +827,7 @@ class RegionsMultiBeam(MultiBeam):
                 #     y + off,
                 # )  # , maxiter=1e4, atol=1e2)
                 nnls_solver = CDNNLS(stacked_Ax, y + off)
-                nnls_solver.run(1000)
+                nnls_solver._run(1000)
                 coeffs = nnls_solver.w
                 # coeffs, rnorm = scipy.optimize.nnls(
                 #     stacked_Ax,
@@ -860,7 +860,7 @@ class RegionsMultiBeam(MultiBeam):
             # print(stacked_modelf.shape)
             # print (coeffs)
 
-            chi2 = np.sum(
+            chi2 = np.nansum(
                 (
                     stacked_weightf
                     * (stacked_scif - stacked_modelf) ** 2
@@ -906,7 +906,7 @@ class RegionsMultiBeam(MultiBeam):
             #     "N  2  6583.45A",
             #     "N  2  6548.05A",
             # ],
-            rm_line="H  1  4861.33A",
+            # rm_line="H  1  4861.33A",
         )
 
         # result_callback = partial(_print_id, dummy_var="test")
@@ -934,7 +934,7 @@ class RegionsMultiBeam(MultiBeam):
             # wait for all tasks to complete and processes to close
             pool.join()
 
-        out_coeffs = np.asarray(output_table[best_iter][2:])
+        out_coeffs = np.array(output_table[best_iter][2:])
         stacked_modelf = np.dot(out_coeffs, stacked_A)
         # print(chi2_tracker)
         print(best_iter, output_table[best_iter])
@@ -1027,10 +1027,14 @@ class RegionsMultiBeam(MultiBeam):
         )
 
         if fit_background:
-            poly_coeffs = out_coeffs[self.N : self.N + self.n_poly]
+            poly_coeffs = out_coeffs[num_stacks : num_stacks + self.n_poly]
         else:
             poly_coeffs = out_coeffs[: self.n_poly]
 
+        print(self.n_poly, self.N)
+        print(num_stacks)
+        print(f"{out_coeffs=}")
+        print(poly_coeffs, self.x_poly)
         self.y_poly = np.dot(poly_coeffs, self.x_poly)
         # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
 

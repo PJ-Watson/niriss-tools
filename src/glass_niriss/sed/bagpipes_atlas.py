@@ -31,6 +31,13 @@ from glass_niriss.c_utils import calc_chisq
 __all__ = ["AtlasGenerator", "AtlasFitter"]
 
 
+default_min_errs = {
+    "continuity:massformed": 0.01,
+    "continuity:metallicity": 0.01,
+    "continuity:dsfr": 0.01,
+}
+
+
 @contextlib.contextmanager
 def temp_chdir(path):
     """
@@ -754,9 +761,18 @@ class AtlasFitter:
             for k in self.params:
                 self.param_samples[k] = np.array(file[k][physical_idx])
 
+            if "redshift" in self.params:
+                z_idx = np.argsort(self.param_samples["redshift"])
+                self.model_atlas = self.model_atlas[z_idx]
+                for k in self.params:
+                    # print (k, self.param_samples[k], self.param_samples[k].dtype, self.para)
+                    self.param_samples[k] = self.param_samples[k][z_idx]
+
             self.n_samples = self.model_atlas.shape[0]
 
-    def fit_single(self, galaxy: bagpipes.galaxy) -> dict:
+    def fit_single(
+        self, galaxy: bagpipes.galaxy, z_range: ArrayLike | None = None
+    ) -> dict:
         """
         Fit a single `bagpipes.galaxy` object.
 
@@ -766,6 +782,9 @@ class AtlasFitter:
             A galaxy object containing the photometric data to be fitted.
             Note that fitting spectroscopic data is currently not
             supported.
+        z_range : ArrayLike | None
+            The redshift range of the galaxy to be fitted. By default
+            ``None``, meaning the entire atlas will be used.
 
         Returns
         -------
@@ -789,19 +808,33 @@ class AtlasFitter:
         #     (self.model_atlas - galaxy.photometry[:, 1]) ** 2 * inv_sigma_sq_phot,
         #     axis=-1,
         # )  # /(diff.shape[1]-len(self.params))
-        chisq_arr = calc_chisq(
-            self.model_atlas,
-            np.ascontiguousarray(galaxy.photometry[:, 1]),
-            inv_sigma_sq_phot,
-        )
+        if z_range is None:
+            chisq_arr = calc_chisq(
+                self.model_atlas,
+                np.ascontiguousarray(galaxy.photometry[:, 1]),
+                inv_sigma_sq_phot,
+            )
+            param2d = [self.param_samples[k] for k in self.params]
+        else:
+            # z_idxs = slice(np.argmin(),np.argmax(self.param_samples["redshift"]<=ID))
+            z_idxs = np.searchsorted(self.param_samples["redshift"], z_range)
+            if z_idxs[0] == self.n_samples or z_idxs[1] == 0:
+                raise ValueError("Redshift range not covered by model atlas.")
+            chisq_arr = calc_chisq(
+                self.model_atlas[z_idxs[0] : z_idxs[1]],
+                np.ascontiguousarray(galaxy.photometry[:, 1]),
+                inv_sigma_sq_phot,
+            )
+            param2d = [
+                self.param_samples[k][z_idxs[0] : z_idxs[-1]] for k in self.params
+            ]
         map_idx = np.argmin(chisq_arr)
         lnlike_oned = K_phot - 0.5 * chisq_arr
 
-        param2d = [self.param_samples[k] for k in self.params]
         param2d.append(lnlike_oned)
         param2d = np.column_stack(param2d)
 
-        chisq_arr /= self.ndim
+        # chisq_arr /= self.ndim
 
         weights = np.exp(-0.5 * chisq_arr) / np.nansum(np.exp(-0.5 * chisq_arr))
         finite_weights = np.isfinite(weights)
@@ -826,6 +859,8 @@ class AtlasFitter:
         results = {}
 
         results["samples2d"] = samples2d[:, :-1]
+        if self.add_errs is not None:
+            results["samples2d"] += self.add_errs
         results["lnlike"] = samples2d[:, -1]
         results["lnz"] = lnlike_oned[map_idx]
         results["lnz_err"] = np.nan
@@ -868,16 +903,19 @@ class AtlasFitter:
             index_list=self.index_list,
         )
 
-        # row_data["#ID"] = ID
-        # return row_data | self.fit_single(galaxy)
-        # return row_data
         posterior_path = self.out_path / "pipes" / "posterior" / self.run / f"{ID}.h5"
 
         if not posterior_path.is_file():
 
-            results = self.fit_single(galaxy)
+            if self.redshifts is not None:
+                ind = np.argmax(self.IDs == ID)
+                # print (f"{ind=}", f"{ID=}", self.IDs)
+                z = self.redshifts[ind]
+                z_range = [z - self.redshift_range / 2, z + self.redshift_range / 2]
+            else:
+                z_range = None
 
-            # print (results["conf_int"])
+            results = self.fit_single(galaxy, z_range)
 
             with h5py.File(posterior_path, "w") as file:
 
@@ -924,7 +962,10 @@ class AtlasFitter:
                 row_data[f"{v}_50"] = np.percentile(values, 50)
                 row_data[f"{v}_84"] = np.percentile(values, 84)
 
-            row_data["input_redshift"] = 0.3033  #!!!
+            if self.redshifts is not None:
+                row_data["input_redshift"] = z
+            else:
+                row_data["input_redshift"] = np.nan
 
             row_data["log_evidence"] = results["lnz"]
             row_data["log_evidence_err"] = results["lnz_err"]
@@ -933,10 +974,6 @@ class AtlasFitter:
                 row_data["chisq_phot"] = np.min(samples["chisq_phot"])
                 n_bands = np.sum(galaxy.photometry[:, 1] != 0.0)
                 row_data["n_bands"] = n_bands
-
-        # # print (row_data)
-
-        # return np.asarray([*row_data.values()])
 
         return row_data
 
@@ -985,6 +1022,34 @@ class AtlasFitter:
 
         return cols
 
+    def check_errs_dict(self, min_uncertainties: dict | None = None) -> None:
+        """
+        Initialise an optional additional uncertainty for the posterior.
+
+        This aims to reduce discretisation effects where the n-dimensional
+        parameter space is undersampled, and is equivalent to a
+        convolution of the posterior distribution with a Gaussian
+        distribution.
+
+        Parameters
+        ----------
+        min_uncertainties : dict | None, optional
+            A dictionary containing the (partial) names of the parameters
+            as keys, and the standard deviation of the additional
+            uncertainty. If ``None``, the posterior samples will not be
+            modified.
+        """
+
+        if min_uncertainties is None:
+            self.add_errs = None
+        else:
+            self.add_errs = np.zeros((self.n_posterior, len(self.params)))
+            for k, v in min_uncertainties.items():
+                for i in [j for j, n in enumerate(self.params) if k in n]:
+                    self.add_errs[:, i] = self.rng.normal(
+                        loc=0.0, scale=v, size=self.n_posterior
+                    )
+
     def fit_catalogue(
         self,
         IDs: list[str],
@@ -995,7 +1060,7 @@ class AtlasFitter:
         cat_filt_list: ArrayLike | None = None,
         vary_filt_list: bool = False,
         redshifts: ArrayLike | None = None,
-        redshift_sigma: float = 0.0,
+        redshift_range: float = 0.01,
         run: str = ".",
         analysis_function: Callable | None = None,
         n_posterior: int = 500,
@@ -1003,6 +1068,7 @@ class AtlasFitter:
         load_indices: Callable | str | None = None,
         index_list: list | None = None,
         parallel: int = 0,
+        min_uncertainties: dict = default_min_errs,
     ):
         """
         Fit a catalogue of sources using the model grid.
@@ -1040,11 +1106,12 @@ class AtlasFitter:
         redshifts : ArrayLike | None, optional
             A list of values of redshift for each object to be fixed to,
             by default ``None``.
-        redshift_sigma : float, optional
-            If this is set, the redshift for each object will be assigned
-            a Gaussian prior centred on the value in ``redshifts``, with
-            this standard deviation. Hard limits will be placed at
-            :math:`{\\pm3\\sigma}`. By default, this is set to 0.0.
+        redshift_range : float, optional
+            # If this is set, the redshift for each object will be assigned
+            # a Gaussian prior centred on the value in ``redshifts``, with
+            # this standard deviation. Hard limits will be placed at
+            # :math:`{\\pm3\\sigma}`. By default, this is set to 0.0.
+            TBD.
         run : str, optional
             The subfolder into which outputs will be saved, useful e.g.
             for fitting more than one model configuration to the same
@@ -1077,6 +1144,11 @@ class AtlasFitter:
             By default this is 0, and the code will run on a single
             process. If set to an integer less than 0, this will run on
             the number of cores returned by `multiprocessing.cpu_count`.
+        min_uncertainties : dict | None, optional
+            A dictionary containing the (partial) names of the parameters
+            as keys, and the standard deviation of the additional
+            uncertainty. If ``None``, the posterior samples will not be
+            modified. By default, this is set by ``default_min_errs``.
         """
 
         self.IDs = np.array(IDs).astype(str)
@@ -1087,7 +1159,7 @@ class AtlasFitter:
         self.cat_filt_list = cat_filt_list
         self.vary_filt_list = vary_filt_list
         self.redshifts = redshifts
-        self.redshift_sigma = redshift_sigma
+        self.redshift_range = redshift_range
         self.run = run
         self.analysis_function = analysis_function
         self.n_posterior = n_posterior
@@ -1110,6 +1182,8 @@ class AtlasFitter:
         self._setup_vars()
         col_names = self._setup_colnames()
 
+        self.check_errs_dict(min_uncertainties)
+
         if parallel == 0:
             self.cat = Table(
                 names=col_names, data=np.zeros((self.n_objects, len(self.params) + 1))
@@ -1129,16 +1203,10 @@ class AtlasFitter:
             print(f"Fitting {self.n_objects} objects using {n_proc} process(es).")
 
             with Pool(processes=n_proc) as pool:
-                # test = self._fit_object(IDs[0])
-                # print (test)
-                # print (test.shape)
-                # print (len(col_names))
                 fit_data = pool.map_async(self._fit_object, tqdm(IDs))
                 fit_data.wait()
-                # print (fit_data.shape)
             self.cat = Table(
                 names=col_names,
-                # data=pool.map_async(self._fit_object, tqdm(IDs)),
                 data=fit_data.get(),
             )
 
