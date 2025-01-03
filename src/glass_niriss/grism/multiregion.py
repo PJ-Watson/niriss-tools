@@ -490,8 +490,13 @@ def _init_pipes_sampler(fit_instructions, veldisp, beams):
 
 
 def _calc_template_from_pipes(
+    seg_idx=None,
     seg_id=None,
-    oversamp_seg_maps=None,
+    shared_seg_name=None,
+    seg_maps_shape=None,
+    shared_temps_name=None,
+    temps_shape=None,
+    # oversamp_seg_maps=None,
     # seg_ids=None,
     posterior_dir=None,
     iteration=None,
@@ -499,25 +504,34 @@ def _calc_template_from_pipes(
     # oversamp_factor=None,
     spec_wavs=None,
     beam_info=None,
+    temp_offset=None,
     # beams=None,
-    stacked_shape=None,
+    # stacked_shape=None,
     cont_only=False,
     rm_line=None,
 ):
     # import sys
     # seg_id = seg_ids[use_idx]
     seg_id = int(seg_id)
+    # print (seg_idx, seg_id)
+
+    shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
+    seg_maps = np.ndarray(seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf)
+    shm_temps = shared_memory.SharedMemory(name=shared_temps_name)
+    temps_arr = np.ndarray(temps_shape, dtype=float, buffer=shm_temps.buf)
+    # print (temps_arr.shape, stacked_shape)
     # print(seg_id, flush=True)
     # sys.stdout.flush()
     file = h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r")
     samples2d = np.array(file["samples2d"])
 
-    template_section = np.zeros((n_samples, stacked_shape))
+    # template_section = np.zeros((n_samples, temps_arr.shape[1]))
 
     for sample_i, sample_vec in enumerate(
         samples2d[iteration * n_samples : (iteration + 1) * n_samples]
     ):
         # print (seg_id, sample_vec)
+        # print (seg_idx, seg_id, sample_i, flush=True)
 
         temp_resamp_1d = pipes_sampler._sample(
             sample_vec,
@@ -536,7 +550,7 @@ def _calc_template_from_pipes(
                 #     oversamp_factor,
                 #     func=np.mean,
                 # )
-                beam_seg = oversamp_seg_maps[ib]
+                beam_seg = seg_maps[seg_idx][ib]
                 tmodel = beam.compute_model(
                     spectrum_1d=temp_resamp_1d,
                     thumb=beam.beam.direct * beam_seg,
@@ -544,33 +558,42 @@ def _calc_template_from_pipes(
                     in_place=False,
                     is_cgs=True,
                 )
-                template_section[
-                    sample_i,
+                #     template_section[
+                #         sample_i,
+                #         i0 : i0 + np.prod(v["2d_shape"]),
+                #     ] += tmodel
+                # template_section[
+                #     sample_i,
+                #     i0 : i0 + np.prod(v["2d_shape"]),
+                # ] /= len(v["list_idx"])
+                temps_arr[
+                    (n_samples * seg_idx) + sample_i + temp_offset,
                     i0 : i0 + np.prod(v["2d_shape"]),
                 ] += tmodel
-            template_section[
-                sample_i,
+            temps_arr[
+                (n_samples * seg_idx) + sample_i + temp_offset,
                 i0 : i0 + np.prod(v["2d_shape"]),
             ] /= len(v["list_idx"])
 
             i0 += np.prod(v["2d_shape"])
 
     # print (np.nansum(template_section), flush=True)
+    # temps_arr[seg_idx * n_samples : (seg_idx + 1) * n_samples] = template_section
 
     # return {"seg_id":seg_id, "template_section":template_section}
-    return (seg_id, template_section)
+    # return (seg_id, template_section)
 
 
-def _format_results(result_tuple, shared_arr, n_samples, seg_ids):
+# def _format_results(result_tuple, shared_arr, n_samples, seg_ids):
 
-    # print (shared_arr, flush=True)
+#     # print (shared_arr, flush=True)
 
-    seg_id, template_section = result_tuple
-    s_i = np.argwhere(seg_ids == int(seg_id))[0][0]
-    # temp_offset + s_i * n_samples + sample_i
+#     seg_id, template_section = result_tuple
+#     s_i = np.argwhere(seg_ids == int(seg_id))[0][0]
+#     # temp_offset + s_i * n_samples + sample_i
 
-    shared_arr[s_i * n_samples : (s_i + 1) * n_samples] = template_section
-    # shared_arr.flush()
+#     shared_arr[s_i * n_samples : (s_i + 1) * n_samples] = template_section
+#     # shared_arr.flush()
 
 
 def _print_id(test_var, dummy_var):
@@ -1027,25 +1050,28 @@ class RegionsMultiBeam(MultiBeam):
             for iteration in iterations:
                 print(f"Iteration {iteration}")
 
-                result_callback = partial(
-                    _format_results,
-                    shared_arr=stacked_A[temp_offset:],
-                    # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
-                    seg_ids=self.regions_seg_ids,
-                    n_samples=n_samples,
-                )
+                # result_callback = partial(
+                #     _format_results,
+                #     shared_arr=stacked_A[temp_offset:],
+                #     # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+                #     seg_ids=self.regions_seg_ids,
+                #     n_samples=n_samples,
+                # )
                 sub_fn = partial(
                     _calc_template_from_pipes,
                     # seg_ids = self.regions_seg_ids,
+                    shared_seg_name=shm_seg_maps.name,
+                    seg_maps_shape=oversamp_seg_maps.shape,
+                    shared_temps_name=shm_stacked_A.name,
+                    temps_shape=stacked_A.shape,
                     posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
                     iteration=iteration,
                     n_samples=n_samples,
-                    # oversamp_seg_maps=oversamp_seg_maps,
-                    # oversamp_factor=oversamp_factor,
                     spec_wavs=spec_wavs,
                     beam_info=beam_info,
+                    temp_offset=temp_offset,
                     # beams=self.beams,
-                    stacked_shape=stacked_shape,
+                    # stacked_shape=stacked_shape,
                     cont_only=False,
                     rm_line=None,
                 )
@@ -1073,8 +1099,9 @@ class RegionsMultiBeam(MultiBeam):
                         # print(pipes_sampler)
                         pool.apply_async(
                             sub_fn,
-                            (s, oversamp_seg_maps[s_i]),
-                            callback=result_callback,
+                            # (s, oversamp_seg_maps[s_i]),
+                            (s_i, s),
+                            # callback=result_callback,
                             error_callback=print,
                         )
                         # print (f"{s}_2")
@@ -1200,6 +1227,7 @@ class RegionsMultiBeam(MultiBeam):
                 # print (stacked_A[:, stacked_fit_mask].shape)
                 # print (stacked_A[:, stacked_fit_mask][ok_temp,:].shape)
                 # print (stacked_Ax.shape, stacked_y.shape)
+                print(stacked_Ax.shape)
                 # Weight by ivar
                 stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
 
@@ -1267,30 +1295,35 @@ class RegionsMultiBeam(MultiBeam):
                 output_table.add_row([iteration, chi2, *out_coeffs])
                 output_table.write(output_table_path, overwrite=True)
                 print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
+                stacked_A[temp_offset:].fill(0.0)
 
             del stacked_Ax
 
             best_iter = np.argmin(output_table["chi2"])
 
-            result_callback = partial(
-                _format_results,
-                shared_arr=stacked_A[temp_offset:],
-                # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
-                seg_ids=self.regions_seg_ids,
-                n_samples=n_samples,
-            )
+            # result_callback = partial(
+            #     _format_results,
+            #     shared_arr=stacked_A[temp_offset:],
+            #     # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+            #     seg_ids=self.regions_seg_ids,
+            #     n_samples=n_samples,
+            # )
+
             sub_fn = partial(
                 _calc_template_from_pipes,
                 # seg_ids = self.regions_seg_ids,
+                shared_seg_name=shm_seg_maps.name,
+                seg_maps_shape=oversamp_seg_maps.shape,
+                shared_temps_name=shm_stacked_A.name,
+                temps_shape=stacked_A.shape,
                 posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
                 iteration=best_iter,
                 n_samples=n_samples,
-                # oversamp_seg_maps=oversamp_seg_maps,
-                # oversamp_factor=oversamp_factor,
                 spec_wavs=spec_wavs,
                 beam_info=beam_info,
+                temp_offset=temp_offset,
                 # beams=self.beams,
-                stacked_shape=stacked_shape,
+                # stacked_shape=stacked_shape,
                 cont_only=False,
                 # rm_line=[
                 #     "O  3  5006.84A",
@@ -1327,8 +1360,9 @@ class RegionsMultiBeam(MultiBeam):
                     # print(pipes_sampler)
                     pool.apply_async(
                         sub_fn,
-                        (s, oversamp_seg_maps[s_i]),
-                        callback=result_callback,
+                        # (s, oversamp_seg_maps[s_i]),
+                        (s_i, s),
+                        # callback=result_callback,
                         error_callback=print,
                     )
                     # print (f"{s}_2")
