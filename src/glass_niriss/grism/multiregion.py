@@ -627,6 +627,30 @@ class RegionsMultiBeam(MultiBeam):
         self.run_name = run_name
         self.pipes_dir = pipes_dir
 
+    @staticmethod
+    def _reduce_seg_map(
+        # self,
+        seg_idx=None,
+        seg_id=None,
+        shared_input=None,
+        init_shape=None,
+        shared_output=None,
+        output_shape=None,
+        beam_idx=None,
+        oversamp_factor=None,
+    ):
+        # print (f"{seg_idx=}, {seg_id=}")
+        shm_init = shared_memory.SharedMemory(name=shared_input)
+        init_arr = np.ndarray(init_shape, dtype=float, buffer=shm_init.buf)
+        shm_output = shared_memory.SharedMemory(name=shared_output)
+        output_arr = np.ndarray(output_shape, dtype=float, buffer=shm_output.buf)
+
+        output_arr[seg_idx][beam_idx] = block_reduce(
+            init_arr == seg_id,
+            oversamp_factor,
+            func=np.mean,
+        )
+
     def fit_at_z(
         self,
         z=0.0,
@@ -758,217 +782,495 @@ class RegionsMultiBeam(MultiBeam):
                 temp_dir = Path.cwd()
             temp_dir.mkdir(exist_ok=True, parents=True)
 
-            oversamp_seg_maps = np.memmap(
-                temp_dir / "oversamp_seg.dat",
-                # dtype=int,
-                mode="w+",
-                shape=(
-                    self.n_regions,
-                    self.N,
-                    # oversamp_factor * self.beams[0].beam.sh[0],
-                    # oversamp_factor * self.beams[0].beam.sh[1],
-                    self.beams[0].beam.sh[0],
-                    self.beams[0].beam.sh[1],
-                ),
+            # oversamp_seg_maps = np.memmap(
+            #     temp_dir / "oversamp_seg.dat",
+            #     # dtype=int,
+            #     mode="w+",
+            #     shape=(
+            #         self.n_regions,
+            #         self.N,
+            #         # oversamp_factor * self.beams[0].beam.sh[0],
+            #         # oversamp_factor * self.beams[0].beam.sh[1],
+            #         self.beams[0].beam.sh[0],
+            #         self.beams[0].beam.sh[1],
+            #     ),
+            # )
+        # else:
+        with SharedMemoryManager() as smm:
+
+            shm_seg_maps = smm.SharedMemory(
+                size=np.dtype(float).itemsize
+                * self.n_regions
+                * self.N
+                * self.beams[0].beam.sh[0]
+                * self.beams[0].beam.sh[1]
             )
-        else:
-            oversamp_seg_maps = np.zeros(
+            oversamp_seg_maps = np.ndarray(
                 (
                     self.n_regions,
                     self.N,
-                    # oversamp_factor * self.beams[0].beam.sh[0],
-                    # oversamp_factor * self.beams[0].beam.sh[1],
                     self.beams[0].beam.sh[0],
                     self.beams[0].beam.sh[1],
                 ),
-                # dtype=int,
+                dtype=float,
+                buffer=shm_seg_maps.buf,
             )
-        beam_info = {}
-        start_idx = 0
+            oversamp_seg_maps.fill(0.0)
+            # shared_init_params[:] = cubes[:]
+            # oversamp_seg_maps = np.zeros(
+            #     (
+            #         self.n_regions,
+            #         self.N,
+            #         # oversamp_factor * self.beams[0].beam.sh[0],
+            #         # oversamp_factor * self.beams[0].beam.sh[1],
+            #         self.beams[0].beam.sh[0],
+            #         self.beams[0].beam.sh[1],
+            #     ),
+            #     # dtype=int,
+            # )
+            beam_info = {}
+            start_idx = 0
 
-        start_idx = 0
-        for i, (beam_cutout, cutout_shape) in enumerate(zip(self.beams, self.Nflat)):
-            beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
-            if not beam_name in beam_info:
-                beam_info[beam_name] = {}
-                beam_info[beam_name]["2d_shape"] = beam_cutout.sh
-                beam_info[beam_name]["list_idx"] = []
-                beam_info[beam_name]["flat_slice"] = []
-            beam_info[beam_name]["list_idx"].append(i)
-            beam_info[beam_name]["flat_slice"].append(
-                slice(int(start_idx), int(start_idx + cutout_shape))
+            shm_oversampled = smm.SharedMemory(
+                size=np.dtype(float).itemsize
+                * oversamp_factor
+                * self.beams[0].beam.sh[0]
+                * oversamp_factor
+                * self.beams[0].beam.sh[1],
             )
-            start_idx += cutout_shape
-
-            beam_wcs = deepcopy(beam_cutout.direct.wcs)
-            beam_wcs.wcs.cd /= oversamp_factor
-            beam_wcs.wcs.crpix *= oversamp_factor
-
-            oversampled = reproject_interp(
-                (self.regions_seg_map, self.regions_seg_wcs),
-                beam_wcs,
+            oversampled = np.ndarray(
                 (
                     oversamp_factor * self.beams[0].beam.sh[0],
                     oversamp_factor * self.beams[0].beam.sh[1],
                 ),
-                return_footprint=False,
-                order=0,
-            )
-
-            # with SharedMemoryManager() as smm:
-            #     shm_in = smm.SharedMemory(size=cubes.nbytes)
-            #     shared_init_params = np.ndarray(
-            #         cubes.shape, dtype=cubes.dtype, buffer=shm_in.buf
-            #     )
-            #     shared_init_params[:] = cubes[:]
-            #         # print (shared_init_params.shape)
-
-            #         # if chunk_size is None:
-            #         #     chunk_size = n_samples // parallel
-            #         _indices = np.arange(n_samples)
-            #         array_indices = np.array_split(_indices, self.n_proc)
-
-            #         # cubes = rng.random((n_samples, self.ndim))
-            #         shm_out = smm.SharedMemory(
-            #             size=(np.dtype(float).itemsize * n_samples * n_output)
-            #         )
-            #         shared_model_atlas = np.ndarray(
-            #             (n_samples, n_output), dtype=float, buffer=shm_out.buf
-            #         )
-            #         # shared_model_atlas[:] = cubes[:]
-
-            #         with Pool(
-            #             processes=self.n_proc, initializer=tqdm.set_lock, initargs=(lock,)
-            #         ) as pool:
-            #             multi_fn = partial(
-            #                 self._shared_memory_worker,
-            #                 shared_init=shm_in.name,
-            #                 init_shape=shared_init_params.shape,
-            #                 shared_output=shm_out.name,
-            #                 output_shape=shared_model_atlas.shape,
-            #                 store_fn=store_fn,
-            #                 tqdm_list=shared_list,
-            #             )
-            #             pool.map(multi_fn, enumerate(array_indices))
-            #             self.model_atlas = shared_model_atlas.copy()
-            #             self.param_vectors = shared_init_params.copy()
-
-            for j, s in enumerate(self.regions_seg_ids):
-                oversamp_seg_maps[j][i] = block_reduce(
-                    oversampled == s,
-                    oversamp_factor,
-                    func=np.mean,
-                )
-        oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
-
-        NTEMP = self.n_regions * n_samples
-        num_stacks = len([*beam_info.keys()])
-        stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
-        temp_offset = A.shape[0] - self.N + num_stacks
-        if memmap:
-            stacked_A = np.memmap(
-                temp_dir / "stacked_A.dat",
                 dtype=float,
-                mode="w+",
-                shape=(temp_offset + NTEMP, stacked_shape),
+                buffer=shm_oversampled.buf,
             )
-        else:
-            stacked_A = np.zeros(
+            oversampled.fill(np.nan)
+
+            start_idx = 0
+            for i, (beam_cutout, cutout_shape) in enumerate(
+                zip(self.beams, self.Nflat)
+            ):
+                beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
+                if not beam_name in beam_info:
+                    beam_info[beam_name] = {}
+                    beam_info[beam_name]["2d_shape"] = beam_cutout.sh
+                    beam_info[beam_name]["list_idx"] = []
+                    beam_info[beam_name]["flat_slice"] = []
+                beam_info[beam_name]["list_idx"].append(i)
+                beam_info[beam_name]["flat_slice"].append(
+                    slice(int(start_idx), int(start_idx + cutout_shape))
+                )
+                start_idx += cutout_shape
+
+                beam_wcs = deepcopy(beam_cutout.direct.wcs)
+                beam_wcs.wcs.cd /= oversamp_factor
+                beam_wcs.wcs.crpix *= oversamp_factor
+
+                # oversampled[:] =
+                # print (oversampled.dtype)
+                oversampled[:] = reproject_interp(
+                    (self.regions_seg_map, self.regions_seg_wcs),
+                    beam_wcs,
+                    (
+                        oversamp_factor * self.beams[0].beam.sh[0],
+                        oversamp_factor * self.beams[0].beam.sh[1],
+                    ),
+                    return_footprint=False,
+                    order=0,
+                    # output_array=oversampled,
+                )
+                # print (test.dtype)
+                with Pool(processes=cpu_count) as pool:
+                    multi_fn = partial(
+                        self._reduce_seg_map,
+                        shared_input=shm_oversampled.name,
+                        init_shape=oversampled.shape,
+                        shared_output=shm_seg_maps.name,
+                        output_shape=oversamp_seg_maps.shape,
+                        beam_idx=i,
+                        oversamp_factor=oversamp_factor,
+                        # store_fn=store_fn,
+                        # tqdm_list=shared_list,
+                    )
+                    pool.starmap(multi_fn, enumerate(self.regions_seg_ids))
+
+            oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
+
+            # exit()
+
+            NTEMP = self.n_regions * n_samples
+            num_stacks = len([*beam_info.keys()])
+            stacked_shape = np.nansum(
+                [np.prod(v["2d_shape"]) for v in beam_info.values()]
+            )
+            temp_offset = A.shape[0] - self.N + num_stacks
+            # if memmap:
+            #     stacked_A = np.memmap(
+            #         temp_dir / "stacked_A.dat",
+            #         dtype=float,
+            #         mode="w+",
+            #         shape=(temp_offset + NTEMP, stacked_shape),
+            #     )
+            # else:
+            #     stacked_A = np.zeros(
+            #         (temp_offset + NTEMP, stacked_shape),
+            #         dtype=float,
+            #     )
+
+            shm_stacked_A = smm.SharedMemory(
+                size=np.dtype(float).itemsize * (temp_offset + NTEMP) * stacked_shape
+            )
+            stacked_A = np.ndarray(
                 (temp_offset + NTEMP, stacked_shape),
                 dtype=float,
+                buffer=shm_stacked_A.buf,
             )
+            stacked_A.fill(0.0)
 
-        # Offset for background
-        if fit_background:
-            off = 0.04
-        else:
-            off = 0.0
-        stacked_scif = np.zeros(stacked_shape)
-        # A = np.zeros((fit_background+3,stacked_shape))
-        # stacked_A_temp = np.zeros((A_temp.shape[0],stacked_shape))
-        stacked_ivarf = np.zeros(stacked_shape)
-        stacked_weightf = np.zeros(stacked_shape)
-        stacked_fit_mask = np.zeros(stacked_shape, dtype=bool)
-        start_idx = 0
-        for k_i, (k, v) in enumerate(beam_info.items()):
-            stack_idxs = np.r_["0,2", *v["flat_slice"]]
-            # stacked_scif[start_idx:start_idx+np.prod(v["2d_shape"])] = np.nansum(
-            #     ((self.scif[stack_idxs])*self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
-            # )/np.nansum(
-            #     (self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
-            # )
-            _scif = self.scif[stack_idxs]
-            # _scif[~self.fit_mask[stack_idxs]] = np.nan
-            stacked_scif[start_idx : start_idx + np.prod(v["2d_shape"])] = np.nanmedian(
-                # (self.scif[stack_idxs]),
-                _scif,
-                axis=0,
-            )
-            stacked_weightf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
-                np.nanmedian(
-                    self.weightf[stack_idxs],
-                    axis=0,
-                )
-            )
-            stacked_fit_mask[start_idx : start_idx + np.prod(v["2d_shape"])] = np.any(
-                self.fit_mask[stack_idxs],
-                axis=0,
-                # dtype=bool
-            )
-            # stacked_fit_mask[start_idx:start_idx+np.prod(v["2d_shape"])] = np.ones_like(stacked_scif[start_idx:start_idx+np.prod(v["2d_shape"])], dtype=bool)
+            # Offset for background
             if fit_background:
-                stacked_A[k_i, start_idx : start_idx + np.prod(v["2d_shape"])] = 1.0
-                stacked_A[
-                    num_stacks : num_stacks + self.A_poly.shape[0],
-                    start_idx : start_idx + np.prod(v["2d_shape"]),
-                ] = np.nanmean(self.A_poly[:, stack_idxs], axis=1)
-                # np.nansum(test_arr[:,indexs], axis=1)
-                #  np.vstack((self.A_bg, self.A_poly))
+                off = 0.04
             else:
-                stacked_A[
-                    num_stacks : num_stacks + self.A_poly.shape[0],
-                    start_idx : start_idx + np.prod(v["2d_shape"]),
-                ] = np.nanmean(self.A_poly[:, stack_idxs], axis=1)
+                off = 0.0
+            stacked_scif = np.zeros(stacked_shape)
+            # A = np.zeros((fit_background+3,stacked_shape))
+            # stacked_A_temp = np.zeros((A_temp.shape[0],stacked_shape))
+            stacked_ivarf = np.zeros(stacked_shape)
+            stacked_weightf = np.zeros(stacked_shape)
+            stacked_fit_mask = np.zeros(stacked_shape, dtype=bool)
+            start_idx = 0
+            for k_i, (k, v) in enumerate(beam_info.items()):
+                stack_idxs = np.r_["0,2", *v["flat_slice"]]
+                # stacked_scif[start_idx:start_idx+np.prod(v["2d_shape"])] = np.nansum(
+                #     ((self.scif[stack_idxs])*self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
+                # )/np.nansum(
+                #     (self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
+                # )
+                _scif = self.scif[stack_idxs]
+                # _scif[~self.fit_mask[stack_idxs]] = np.nan
+                stacked_scif[start_idx : start_idx + np.prod(v["2d_shape"])] = (
+                    np.nanmedian(
+                        # (self.scif[stack_idxs]),
+                        _scif,
+                        axis=0,
+                    )
+                )
+                stacked_weightf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
+                    np.nanmedian(
+                        self.weightf[stack_idxs],
+                        axis=0,
+                    )
+                )
+                stacked_fit_mask[start_idx : start_idx + np.prod(v["2d_shape"])] = (
+                    np.any(
+                        self.fit_mask[stack_idxs],
+                        axis=0,
+                        # dtype=bool
+                    )
+                )
+                # stacked_fit_mask[start_idx:start_idx+np.prod(v["2d_shape"])] = np.ones_like(stacked_scif[start_idx:start_idx+np.prod(v["2d_shape"])], dtype=bool)
+                if fit_background:
+                    stacked_A[k_i, start_idx : start_idx + np.prod(v["2d_shape"])] = 1.0
+                    stacked_A[
+                        num_stacks : num_stacks + self.A_poly.shape[0],
+                        start_idx : start_idx + np.prod(v["2d_shape"]),
+                    ] = np.nanmean(self.A_poly[:, stack_idxs], axis=1)
+                    # np.nansum(test_arr[:,indexs], axis=1)
+                    #  np.vstack((self.A_bg, self.A_poly))
+                else:
+                    stacked_A[
+                        num_stacks : num_stacks + self.A_poly.shape[0],
+                        start_idx : start_idx + np.prod(v["2d_shape"]),
+                    ] = np.nanmean(self.A_poly[:, stack_idxs], axis=1)
 
-            # stacked_A_temp[:,start_idx:start_idx+np.prod(v["2d_shape"])] = np.nanmean(
-            #     A_temp[:,stack_idxs], axis=1
-            # )
-            stacked_ivarf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
-                np.nanmedian(self.ivarf[stack_idxs], axis=0)
+                # stacked_A_temp[:,start_idx:start_idx+np.prod(v["2d_shape"])] = np.nanmean(
+                #     A_temp[:,stack_idxs], axis=1
+                # )
+                stacked_ivarf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
+                    np.nanmedian(self.ivarf[stack_idxs], axis=0)
+                )
+                # stacked_fit_mask[start_idx:start_idx+np.prod(v["2d_shape"])] = np.nansum(
+                #     multib.scif[np.r_['0,2', *v["flat_slice"]]], axis=0
+                # )
+
+                start_idx += np.prod(v["2d_shape"])
+
+            # iteration = 0
+
+            # print(stacked_weightf)
+
+            coeffs_tracker = []
+            chi2_tracker = []
+
+            output_table = Table(
+                names=["iteration", "chi2"]
+                + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
+                + [
+                    f"{p[0]}_{p[1]}"
+                    for p in product(
+                        self.regions_phot_cat["bin_id"], np.arange(n_samples)
+                    )
+                ]
             )
-            # stacked_fit_mask[start_idx:start_idx+np.prod(v["2d_shape"])] = np.nansum(
-            #     multib.scif[np.r_['0,2', *v["flat_slice"]]], axis=0
-            # )
+            # print(output_table)
+            # print(len(output_table.colnames))
+            output_table_path = out_dir / (
+                f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
+                f"bins_{num_iters}iters_{n_samples}samples.csv"
+            )
+            print(output_table_path)
+            output_table.write(output_table_path, overwrite=True, format="pandas.csv")
 
-            start_idx += np.prod(v["2d_shape"])
+            iterations = np.arange(num_iters)
+            for iteration in iterations:
+                print(f"Iteration {iteration}")
 
-        # iteration = 0
+                result_callback = partial(
+                    _format_results,
+                    shared_arr=stacked_A[temp_offset:],
+                    # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+                    seg_ids=self.regions_seg_ids,
+                    n_samples=n_samples,
+                )
+                sub_fn = partial(
+                    _calc_template_from_pipes,
+                    # seg_ids = self.regions_seg_ids,
+                    posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
+                    iteration=iteration,
+                    n_samples=n_samples,
+                    # oversamp_seg_maps=oversamp_seg_maps,
+                    # oversamp_factor=oversamp_factor,
+                    spec_wavs=spec_wavs,
+                    beam_info=beam_info,
+                    # beams=self.beams,
+                    stacked_shape=stacked_shape,
+                    cont_only=False,
+                    rm_line=None,
+                )
 
-        print(stacked_weightf)
+                # result_callback = partial(_print_id, dummy_var="test")
+                # init_fn = partial(_init_pipes_sampler, fit_instructions=fit_instructions, veldisp=veldisp)
+                print("Generating models...")
+                with multiprocessing.Pool(
+                    processes=cpu_count,
+                    # initializer=init_fn,
+                    # initargs=np.arange(cpu_count),
+                    # initargs=0,
+                    initializer=_init_pipes_sampler,
+                    initargs=(
+                        fit_instructions,
+                        veldisp,
+                        self.beams,
+                    ),  # oversamp_seg_maps),
+                ) as pool:
+                    # pool.map(sub_fn, self.regions_phot_cat["bin_id"])
+                    # pool.map_async(sub_fn, self.regions_phot_cat["bin_id"], callback=result_callback, error_callback=print)
 
-        coeffs_tracker = []
-        chi2_tracker = []
+                    for s_i, s in enumerate(self.regions_seg_ids):
+                        # print (s_i,s)
+                        # print(pipes_sampler)
+                        pool.apply_async(
+                            sub_fn,
+                            (s, oversamp_seg_maps[s_i]),
+                            callback=result_callback,
+                            error_callback=print,
+                        )
+                        # print (f"{s}_2")
+                    pool.close()
+                    # wait for all tasks to complete and processes to close
+                    pool.join()
 
-        output_table = Table(
-            names=["iteration", "chi2"]
-            + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
-            + [
-                f"{p[0]}_{p[1]}"
-                for p in product(self.regions_phot_cat["bin_id"], np.arange(n_samples))
-            ]
-        )
-        print(output_table)
-        print(len(output_table.colnames))
-        output_table_path = out_dir / (
-            f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            f"bins_{num_iters}iters_{n_samples}samples.csv"
-        )
-        print(output_table_path)
-        output_table.write(output_table_path, overwrite=True, format="pandas.csv")
+                # for s_i, seg_id in enumerate(self.regions_phot_cat["bin_id"]):
+                #     print(s_i)
+                #     # if s_i == 0:
+                #     file = h5py.File(
+                #         self.pipes_dir / "posterior" / self.run_name / f"{seg_id}.h5", "r"
+                #     )
+                #     samples2d = np.array(file["samples2d"])
 
-        iterations = np.arange(num_iters)
-        for iteration in iterations:
-            print(f"Iteration {iteration}")
+                #     for sample_i, sample_vec in enumerate(
+                #         samples2d[iteration * n_samples : (iteration + 1) * n_samples]
+                #     ):
+                #         # print (seg_id, sample_vec)
+
+                #         temp_resamp_1d = pipes_sampler.sample(sample_vec, spec_wavs=spec_wavs)
+
+                #         i0 = 0
+                #         for k_i, (k, v) in enumerate(beam_info.items()):
+                #             stack_idxs = np.r_["0,2", *v["flat_slice"]]
+                #             for ib in v["list_idx"]:
+                #                 beam = self.beams[ib]
+                #                 beam_seg = block_reduce(
+                #                     oversamp_seg_maps[ib] == int(seg_id),
+                #                     oversamp_factor,
+                #                     func=np.mean,
+                #                 )
+                #                 tmodel = beam.compute_model(
+                #                     spectrum_1d=temp_resamp_1d,
+                #                     thumb=beam.beam.direct * beam_seg,
+                #                     # thumb=new_direct[ib]*beam_seg,
+                #                     in_place=False,
+                #                     is_cgs=True,
+                #                 )
+                #                 stacked_A[
+                #                     temp_offset + s_i * n_samples + sample_i,
+                #                     i0 : i0 + np.prod(v["2d_shape"]),
+                #                 ] += tmodel
+                #             stacked_A[
+                #                 temp_offset + s_i * n_samples + sample_i,
+                #                 i0 : i0 + np.prod(v["2d_shape"]),
+                #             ] /= len(v["list_idx"])
+                #             i0 += np.prod(v["2d_shape"])
+
+                print("Generating models... DONE")
+                ok_temp = np.sum(stacked_A, axis=1) > 0
+                from time import time
+
+                # print ("Done sum")
+                # _, unique_idxs = np.unique(stacked_A, axis=0, return_index=True)
+                # # print ("Done unique")
+                # unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
+                # init_time = time()
+                # unique_temp = ~duplicated_rows(stacked_A)
+                # print (time()-init_time)
+                # init_time = time()
+
+                stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
+                # np.unique() finds identical items in a raveled array. To make it
+                # see each row as a single item, we create a view of each row as a
+                # byte string of length itemsize times number of columns in `ar`
+                ar_row_view = stacked_A_contig.view(
+                    "|S%d" % (stacked_A_contig.itemsize * stacked_A_contig.shape[1])
+                )
+                _, unique_idxs = np.unique(ar_row_view, return_index=True)
+                unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
+                # print (time()-init_time)
+                # exit()
+
+                # repeats = 5
+
+                # init_time = time()
+                # times_pandas = []
+                # for i in range(repeats):
+                #     duplicated_rows(stacked_A)
+                #     times_pandas.append(time()-init_time)
+                #     init_time = time()
+
+                # init_time = time()
+                # times_np = []
+                # for i in range(repeats):
+                #     numpy.unique(stacked_A, axis=0, return_index=True)
+                #     times_np.append(time()-init_time)
+                #     init_time = time()
+
+                # # times_pandas = timeit.timeit(
+                # #     "duplicated_rows(stacked_A)",
+                # #     globals=globals(),
+                # #     setup="from __main__ import stacked_A",
+                # #     number=5,
+                # # )
+                # print(
+                #     f"Pandas: {np.nanmedian(times_pandas):.3f} +/- {np.nanmedian(times_pandas):.3f}"
+                # )
+                # # times_np = timeit.timeit(
+                # #     "numpy.unique(stacked_A, axis=0, return_index=True)",
+                # #     setup="from __main__ import numpy, stacked_A",
+                # #     number=5,
+                # # )
+                # print(
+                #     f"Numpy: {np.nanmedian(times_np):.3f} +/- {np.nanmedian(times_np):.3f}"
+                # )
+                ok_temp &= unique_temp
+                # print ("3")
+                # print ("Unique,", np.nansum(unique_temp), stacked_A.shape)
+                out_coeffs = np.zeros(stacked_A.shape[0])
+                # print(ok_temp, ok_temp.shape, out_coeffs.shape)
+                # print (stacked_fit_mask.shape,stacked_y.shape)
+                # print ("Done others")
+                stacked_fit_mask &= np.isfinite(stacked_scif)
+                # print ("Done masking")
+
+                # for row in stacked_A_temp:
+                #     print (np.sum(row)>0)
+
+                stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
+                # print ("Transposed")
+                # print (stacked_A[:, stacked_fit_mask].shape)
+                # print (stacked_A[:, stacked_fit_mask][ok_temp,:].shape)
+                # print (stacked_Ax.shape, stacked_y.shape)
+                # Weight by ivar
+                stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
+
+                print("NNLS fitting...")
+                # exit()
+                # print (stacked_Ax.shape, stacked_y.shape)
+
+                if fit_background:
+                    y = stacked_scif[stacked_fit_mask] + off
+                    y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
+                    # # y_fit = stacked_y[stacked_fit_mask] + off
+                    # # y_fit = stacked_y[stacked_fit_mask] + off
+                    # coeffs, rnorm = scipy.optimize.nnls(
+                    #     stacked_Ax,
+                    #     y + off,
+                    # )  # , maxiter=1e4, atol=1e2)
+                    # print (stacked_Ax.shape)
+                    # exit()
+                    nnls_solver = CDNNLS(stacked_Ax, y + off)
+                    # nnls_solver._run(stacked_Ax.shape[1]*3)
+                    nnls_solver.run(n_iter=100)
+                    coeffs = nnls_solver.w
+                    # coeffs, rnorm = scipy.optimize.nnls(
+                    #     stacked_Ax,
+                    #     y + off,
+                    # )  # , maxiter=1e4, atol=1e2)
+                    # _lsq_res = scipy.optimize.lsq_linear(stacked_Ax, y + off, bounds=(0, np.inf), method='bvls', verbose=1)
+                    # coeffs = _lsq_res.x
+                    # print (f"Status: {_lsq_res.status}")
+                    # coeffs = fe.fnnls(numpy.ascontiguousarray(stacked_Ax), numpy.ascontiguousarray(y + off))
+                    # coeffs = solve_nnls(stacked_Ax, y + off, gtol=1e-10, max_iter=stacked_Ax.shape[1]*3)[0]
+                    # tnt_result = tntnn(stacked_Ax, y+off, verbose=True)
+                    # coeffs = tnt_result.x
+                    coeffs[:num_stacks] -= off
+                else:
+                    y = self.scif[self.fit_mask]
+                    y *= np.sqrt(self.ivarf[self.fit_mask])
+
+                    coeffs, rnorm = scipy.optimize.nnls(Ax, y)
+
+                    Ax = A[:, self.fit_mask][ok_temp, :].T
+                    # Weight by ivar
+                    Ax *= np.sqrt(self.ivarf[self.fit_mask][:, np.newaxis])
+
+                print("NNLS fitting... DONE")
+                out_coeffs[ok_temp] = coeffs
+                stacked_modelf = np.dot(out_coeffs, stacked_A)
+                # chi2 = np.sum((self.weightf*(self.scif - modelf)**2*stacked_ivarf)[self.fit_mask])
+
+                # print(stacked_modelf)
+                # print(stacked_modelf.shape)
+                # print (coeffs)
+
+                chi2 = np.nansum(
+                    (
+                        stacked_weightf
+                        * (stacked_scif - stacked_modelf) ** 2
+                        * stacked_ivarf
+                    )[stacked_fit_mask]
+                )
+
+                # coeffs_tracker.append(out_coeffs)
+                # chi2_tracker.append(chi2)#
+
+                output_table.add_row([iteration, chi2, *out_coeffs])
+                output_table.write(output_table_path, overwrite=True)
+                print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
+
+            del stacked_Ax
+
+            best_iter = np.argmin(output_table["chi2"])
 
             result_callback = partial(
                 _format_results,
@@ -981,7 +1283,7 @@ class RegionsMultiBeam(MultiBeam):
                 _calc_template_from_pipes,
                 # seg_ids = self.regions_seg_ids,
                 posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
-                iteration=iteration,
+                iteration=best_iter,
                 n_samples=n_samples,
                 # oversamp_seg_maps=oversamp_seg_maps,
                 # oversamp_factor=oversamp_factor,
@@ -990,29 +1292,38 @@ class RegionsMultiBeam(MultiBeam):
                 # beams=self.beams,
                 stacked_shape=stacked_shape,
                 cont_only=False,
-                rm_line=None,
+                # rm_line=[
+                #     "O  3  5006.84A",
+                #     "O  3  4958.91A"
+                # ]
+                # rm_line=[
+                #     "Blnd  3726.00A",
+                #     "Blnd  3729.00A",
+                # ],
+                # rm_line = "H  1  6562.81A"
+                rm_line=[
+                    "H  1  6562.81A",
+                    "N  2  6583.45A",
+                    "N  2  6548.05A",
+                ],
+                # rm_line="H  1  4861.33A",
             )
 
             # result_callback = partial(_print_id, dummy_var="test")
             # init_fn = partial(_init_pipes_sampler, fit_instructions=fit_instructions, veldisp=veldisp)
-            print("Generating models...")
             with multiprocessing.Pool(
                 processes=cpu_count,
                 # initializer=init_fn,
                 # initargs=np.arange(cpu_count),
                 # initargs=0,
                 initializer=_init_pipes_sampler,
-                initargs=(
-                    fit_instructions,
-                    veldisp,
-                    self.beams,
-                ),  # oversamp_seg_maps),
+                initargs=(fit_instructions, veldisp, self.beams),
             ) as pool:
+                # print("Initialised")
                 # pool.map(sub_fn, self.regions_phot_cat["bin_id"])
                 # pool.map_async(sub_fn, self.regions_phot_cat["bin_id"], callback=result_callback, error_callback=print)
-
-                for s_i, s in enumerate(self.regions_seg_ids):
-                    # print (s_i,s)
+                for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
+                    # print (s)
                     # print(pipes_sampler)
                     pool.apply_async(
                         sub_fn,
@@ -1024,255 +1335,6 @@ class RegionsMultiBeam(MultiBeam):
                 pool.close()
                 # wait for all tasks to complete and processes to close
                 pool.join()
-
-            # for s_i, seg_id in enumerate(self.regions_phot_cat["bin_id"]):
-            #     print(s_i)
-            #     # if s_i == 0:
-            #     file = h5py.File(
-            #         self.pipes_dir / "posterior" / self.run_name / f"{seg_id}.h5", "r"
-            #     )
-            #     samples2d = np.array(file["samples2d"])
-
-            #     for sample_i, sample_vec in enumerate(
-            #         samples2d[iteration * n_samples : (iteration + 1) * n_samples]
-            #     ):
-            #         # print (seg_id, sample_vec)
-
-            #         temp_resamp_1d = pipes_sampler.sample(sample_vec, spec_wavs=spec_wavs)
-
-            #         i0 = 0
-            #         for k_i, (k, v) in enumerate(beam_info.items()):
-            #             stack_idxs = np.r_["0,2", *v["flat_slice"]]
-            #             for ib in v["list_idx"]:
-            #                 beam = self.beams[ib]
-            #                 beam_seg = block_reduce(
-            #                     oversamp_seg_maps[ib] == int(seg_id),
-            #                     oversamp_factor,
-            #                     func=np.mean,
-            #                 )
-            #                 tmodel = beam.compute_model(
-            #                     spectrum_1d=temp_resamp_1d,
-            #                     thumb=beam.beam.direct * beam_seg,
-            #                     # thumb=new_direct[ib]*beam_seg,
-            #                     in_place=False,
-            #                     is_cgs=True,
-            #                 )
-            #                 stacked_A[
-            #                     temp_offset + s_i * n_samples + sample_i,
-            #                     i0 : i0 + np.prod(v["2d_shape"]),
-            #                 ] += tmodel
-            #             stacked_A[
-            #                 temp_offset + s_i * n_samples + sample_i,
-            #                 i0 : i0 + np.prod(v["2d_shape"]),
-            #             ] /= len(v["list_idx"])
-            #             i0 += np.prod(v["2d_shape"])
-
-            print("Generating models... DONE")
-            ok_temp = np.sum(stacked_A, axis=1) > 0
-            from time import time
-
-            # print ("Done sum")
-            # _, unique_idxs = np.unique(stacked_A, axis=0, return_index=True)
-            # # print ("Done unique")
-            # unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
-            # init_time = time()
-            # unique_temp = ~duplicated_rows(stacked_A)
-            # print (time()-init_time)
-            # init_time = time()
-
-            stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
-            # np.unique() finds identical items in a raveled array. To make it
-            # see each row as a single item, we create a view of each row as a
-            # byte string of length itemsize times number of columns in `ar`
-            ar_row_view = stacked_A_contig.view(
-                "|S%d" % (stacked_A_contig.itemsize * stacked_A_contig.shape[1])
-            )
-            _, unique_idxs = np.unique(ar_row_view, return_index=True)
-            unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
-            # print (time()-init_time)
-            # exit()
-
-            # repeats = 5
-
-            # init_time = time()
-            # times_pandas = []
-            # for i in range(repeats):
-            #     duplicated_rows(stacked_A)
-            #     times_pandas.append(time()-init_time)
-            #     init_time = time()
-
-            # init_time = time()
-            # times_np = []
-            # for i in range(repeats):
-            #     numpy.unique(stacked_A, axis=0, return_index=True)
-            #     times_np.append(time()-init_time)
-            #     init_time = time()
-
-            # # times_pandas = timeit.timeit(
-            # #     "duplicated_rows(stacked_A)",
-            # #     globals=globals(),
-            # #     setup="from __main__ import stacked_A",
-            # #     number=5,
-            # # )
-            # print(
-            #     f"Pandas: {np.nanmedian(times_pandas):.3f} +/- {np.nanmedian(times_pandas):.3f}"
-            # )
-            # # times_np = timeit.timeit(
-            # #     "numpy.unique(stacked_A, axis=0, return_index=True)",
-            # #     setup="from __main__ import numpy, stacked_A",
-            # #     number=5,
-            # # )
-            # print(
-            #     f"Numpy: {np.nanmedian(times_np):.3f} +/- {np.nanmedian(times_np):.3f}"
-            # )
-            ok_temp &= unique_temp
-            # print ("3")
-            # print ("Unique,", np.nansum(unique_temp), stacked_A.shape)
-            out_coeffs = np.zeros(stacked_A.shape[0])
-            # print(ok_temp, ok_temp.shape, out_coeffs.shape)
-            # print (stacked_fit_mask.shape,stacked_y.shape)
-            # print ("Done others")
-            stacked_fit_mask &= np.isfinite(stacked_scif)
-            # print ("Done masking")
-
-            # for row in stacked_A_temp:
-            #     print (np.sum(row)>0)
-
-            stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
-            # print ("Transposed")
-            # print (stacked_A[:, stacked_fit_mask].shape)
-            # print (stacked_A[:, stacked_fit_mask][ok_temp,:].shape)
-            # print (stacked_Ax.shape, stacked_y.shape)
-            # Weight by ivar
-            stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
-
-            print("NNLS fitting...")
-            # exit()
-            # print (stacked_Ax.shape, stacked_y.shape)
-
-            if fit_background:
-                y = stacked_scif[stacked_fit_mask] + off
-                y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
-                # # y_fit = stacked_y[stacked_fit_mask] + off
-                # # y_fit = stacked_y[stacked_fit_mask] + off
-                # coeffs, rnorm = scipy.optimize.nnls(
-                #     stacked_Ax,
-                #     y + off,
-                # )  # , maxiter=1e4, atol=1e2)
-                # print (stacked_Ax.shape)
-                # exit()
-                nnls_solver = CDNNLS(stacked_Ax, y + off)
-                # nnls_solver._run(stacked_Ax.shape[1]*3)
-                nnls_solver.run(n_iter=100)
-                coeffs = nnls_solver.w
-                # coeffs, rnorm = scipy.optimize.nnls(
-                #     stacked_Ax,
-                #     y + off,
-                # )  # , maxiter=1e4, atol=1e2)
-                # _lsq_res = scipy.optimize.lsq_linear(stacked_Ax, y + off, bounds=(0, np.inf), method='bvls', verbose=1)
-                # coeffs = _lsq_res.x
-                # print (f"Status: {_lsq_res.status}")
-                # coeffs = fe.fnnls(numpy.ascontiguousarray(stacked_Ax), numpy.ascontiguousarray(y + off))
-                # coeffs = solve_nnls(stacked_Ax, y + off, gtol=1e-10, max_iter=stacked_Ax.shape[1]*3)[0]
-                # tnt_result = tntnn(stacked_Ax, y+off, verbose=True)
-                # coeffs = tnt_result.x
-                coeffs[:num_stacks] -= off
-            else:
-                y = self.scif[self.fit_mask]
-                y *= np.sqrt(self.ivarf[self.fit_mask])
-
-                coeffs, rnorm = scipy.optimize.nnls(Ax, y)
-
-                Ax = A[:, self.fit_mask][ok_temp, :].T
-                # Weight by ivar
-                Ax *= np.sqrt(self.ivarf[self.fit_mask][:, np.newaxis])
-
-            print("NNLS fitting... DONE")
-            out_coeffs[ok_temp] = coeffs
-            stacked_modelf = np.dot(out_coeffs, stacked_A)
-            # chi2 = np.sum((self.weightf*(self.scif - modelf)**2*stacked_ivarf)[self.fit_mask])
-
-            # print(stacked_modelf)
-            # print(stacked_modelf.shape)
-            # print (coeffs)
-
-            chi2 = np.nansum(
-                (
-                    stacked_weightf
-                    * (stacked_scif - stacked_modelf) ** 2
-                    * stacked_ivarf
-                )[stacked_fit_mask]
-            )
-
-            # coeffs_tracker.append(out_coeffs)
-            # chi2_tracker.append(chi2)#
-
-            output_table.add_row([iteration, chi2, *out_coeffs])
-            output_table.write(output_table_path, overwrite=True)
-            print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
-
-        best_iter = np.argmin(output_table["chi2"])
-
-        result_callback = partial(
-            _format_results,
-            shared_arr=stacked_A[temp_offset:],
-            # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
-            seg_ids=self.regions_seg_ids,
-            n_samples=n_samples,
-        )
-        sub_fn = partial(
-            _calc_template_from_pipes,
-            # seg_ids = self.regions_seg_ids,
-            posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
-            iteration=best_iter,
-            n_samples=n_samples,
-            # oversamp_seg_maps=oversamp_seg_maps,
-            # oversamp_factor=oversamp_factor,
-            spec_wavs=spec_wavs,
-            beam_info=beam_info,
-            # beams=self.beams,
-            stacked_shape=stacked_shape,
-            cont_only=False,
-            # rm_line="O  3  5006.84A"
-            # rm_line=[
-            #     "Blnd  3726.00A",
-            #     "Blnd  3729.00A",
-            # ],
-            # rm_line = "H  1  6562.81A"
-            # rm_line=[
-            #     "H  1  6562.81A",
-            #     "N  2  6583.45A",
-            #     "N  2  6548.05A",
-            # ],
-            # rm_line="H  1  4861.33A",
-        )
-
-        # result_callback = partial(_print_id, dummy_var="test")
-        # init_fn = partial(_init_pipes_sampler, fit_instructions=fit_instructions, veldisp=veldisp)
-        with multiprocessing.Pool(
-            processes=cpu_count,
-            # initializer=init_fn,
-            # initargs=np.arange(cpu_count),
-            # initargs=0,
-            initializer=_init_pipes_sampler,
-            initargs=(fit_instructions, veldisp, self.beams),
-        ) as pool:
-            # print("Initialised")
-            # pool.map(sub_fn, self.regions_phot_cat["bin_id"])
-            # pool.map_async(sub_fn, self.regions_phot_cat["bin_id"], callback=result_callback, error_callback=print)
-            for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                # print (s)
-                # print(pipes_sampler)
-                pool.apply_async(
-                    sub_fn,
-                    (s, oversamp_seg_maps[s_i]),
-                    callback=result_callback,
-                    error_callback=print,
-                )
-                # print (f"{s}_2")
-            pool.close()
-            # wait for all tasks to complete and processes to close
-            pool.join()
 
         out_coeffs = np.array(output_table[best_iter][2:])
         stacked_modelf = np.dot(out_coeffs, stacked_A)
