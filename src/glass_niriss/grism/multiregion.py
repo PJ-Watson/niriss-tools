@@ -6,6 +6,8 @@ import multiprocessing
 from copy import deepcopy
 from functools import partial
 from itertools import product
+from multiprocessing import Manager, Pool, cpu_count, shared_memory
+from multiprocessing.managers import SharedMemoryManager
 from os import PathLike
 from pathlib import Path
 
@@ -13,6 +15,10 @@ import bagpipes
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+
+# import fnnlsEigen as fe
+# from matrix_free_nnls import solve_nnls
+import pandas
 from astropy.io import fits
 from astropy.nddata import block_reduce
 from astropy.table import Table
@@ -20,12 +26,27 @@ from astropy.wcs import WCS
 from bagpipes import model_galaxy
 from grizli.multifit import MultiBeam
 from numpy.typing import ArrayLike
+from pandas._libs.hashtable import SIZE_HINT_LIMIT, duplicated
+from pandas.core import algorithms
+from pandas.core.sorting import get_group_index
 from reproject import reproject_interp
 
 from glass_niriss.grism.specgen import ExtendedModelGalaxy
 
-# import fnnlsEigen as fe
-# from matrix_free_nnls import solve_nnls
+# def duplicated_rows(a, keep="first"):
+#     size_hint = min(a.shape[0], SIZE_HINT_LIMIT)
+
+#     def f(vals):
+#         labels, shape = algorithms.factorize(vals, size_hint=size_hint)
+#         return labels.astype("i8", copy=False), len(shape)
+
+#     vals = (col for col in a.T)
+#     labels, shape = map(list, zip(*map(f, vals)))
+
+#     ids = get_group_index(labels, shape, sort=False, xnull=False)
+#     return duplicated(ids, keep)
+
+
 # from glass_niriss.pytntnn import tntnn
 
 __all__ = ["BagpipesSampler", "RegionsMultiBeam", "CDNNLS"]
@@ -34,6 +55,7 @@ pipes_sampler = None
 beams_object = None
 # scaled_seg_maps = None
 
+import numba
 import numpy as np
 from numba import njit
 from numpy.typing import ArrayLike
@@ -57,27 +79,196 @@ class CDNNLS:
 
     def _set_objective(self, X, y):
         # use Fortran order to compute gradient on contiguous columns
-        self.X, self.y = np.asfortranarray(X), y
+        # self.X, self.y = np.asfortranarray(X), y
+        self.X, self.y = X, y
 
         # Make sure we cache the numba compilation.
-        self._run(1)
+        self.run(1)
 
-    def _run(self, n_iter):
-        L = (self.X**2).sum(axis=0)
+    def run(
+        self,
+        method: str = "classic",
+        n_iter: int | None = None,
+        epsilon: float = 1e-6,
+        **kwargs,
+    ):
+        """
+        Run a non-negative least squares solver.
+
+        Parameters
+        ----------
+        method : str, optional
+            The method to use, either the default "classic", or "antilop".
+        n_iter : int | None, optional
+            How many iterations to run. If ``None``, then this is set to
+            ``3*X.shape[1]``.
+        epsilon : float, optional
+            The tolerance to use for the stopping condition, by default
+            ``1e-6``.
+        **kwargs : dict, optional
+            Other arguments to pass to the individual methods.
+        """
+
+        if n_iter is None:
+            n_iter = 3 * self.X.shape[1]
+        match method:
+            case "classic":
+                print("classic")
+                self._run_classic(n_iter, epsilon, **kwargs)
+            case "antilop":
+                print("antilop")
+                self.w = self._run_antilop(self.X, self.y, n_iter, epsilon, **kwargs)
+
+    # @staticmethod
+    # @njit('double[:,:](double[:,:], double[:,:],double,int_,double[:,:])')
+    # def _solve_NQP(Q, q, epsilon, max_n_iter, x):
+
+    #     # Initialize
+    #     x_diff     = np.zeros_like(x)
+    #     grad_f     = q.copy()
+    #     grad_f_bar = q.copy()
+
+    #     # Loop over iterations
+    #     for i in range(max_n_iter):
+
+    #         # Get passive set information
+    #         passive_set = np.logical_or(x > 0, grad_f < 0)
+    #         # print (f"{passive_set.shape=}")
+    #         n_passive = np.sum(passive_set)
+
+    #         # Calculate gradient
+    #         grad_f_bar[:] = grad_f
+    #         # orig_shape = grad_f_bar
+    #         grad_f_bar = grad_f_bar.flatten()
+    #         grad_f_bar[~passive_set.flatten()] = 0
+    #         grad_f_bar = grad_f_bar.reshape(grad_f.shape)
+    #         grad_norm = np.dot(grad_f_bar.flatten(), grad_f_bar.flatten())
+    #         # print (grad_norm)
+
+    #         # Abort?
+    #         if (n_passive == 0 or grad_norm < epsilon):
+    #             break
+
+    #         # Exact line search
+    #         # print (Q.dot(grad_f_bar).shape, grad_f_bar.shape)
+    #         alpha_den = np.vdot(grad_f_bar.flatten(), Q.dot(grad_f_bar).flatten())
+    #         alpha = grad_norm / alpha_den
+
+    #         # Update x
+    #         x_diff = -x.copy()
+    #         x -= alpha * grad_f_bar
+    #         x = np.maximum(x, 0.)
+    #         x_diff += x
+
+    #         # Update gradient
+    #         grad_f += Q.dot(x_diff)
+    #         # print (grad_f)
+
+    #     # # Return
+    #     return x
+
+    @staticmethod
+    @njit(
+        numba.double[:, ::1](
+            numba.double[:, ::1], numba.double[::1], numba.int_, numba.double
+        )
+    )
+    def _run_antilop(X, Y, n_iter, epsilon):
+
+        # if not n_iter:
+        #     n_iter = 3*Y.shape[0]
+
+        XTX = np.dot(X.T, X)
+        XTY = np.dot(X.T, Y)
+
+        # Normalization factors
+        H_diag = np.diag(XTX).reshape(-1, 1)
+        Q_den = np.sqrt(np.outer(H_diag, H_diag))
+        q_den = np.sqrt(H_diag)
+
+        # Normalize
+        Q = XTX / Q_den
+        q = -XTY.reshape(-1, 1) / q_den
+        # q = -XTY / q_den.flatten()
+
+        # print (XTX.shape, XTY.shape, q_den.flatten().shape)
+
+        # Solve NQP
+        y = np.zeros((X.shape[1], 1))
+        # print (q.shape)
+        # y = self.solveNQP_NUMBA(Q, q, epsilon, max_n_iter, y)
+        y_diff = np.zeros_like(y)
+        grad_f = q.copy()
+        grad_f_bar = q.copy()
+
+        # Loop over iterations
+        for i in range(n_iter):
+
+            # Get passive set information
+            passive_set = np.logical_or(y > 0, grad_f < 0)
+            # print (f"{passive_set.shape=}")
+            n_passive = np.sum(passive_set)
+
+            # Calculate gradient
+            grad_f_bar[:] = grad_f
+            # orig_shape = grad_f_bar
+            grad_f_bar = grad_f_bar.flatten()
+            grad_f_bar[~passive_set.flatten()] = 0
+            grad_f_bar = grad_f_bar.reshape(grad_f.shape)
+            grad_norm = np.dot(grad_f_bar.flatten(), grad_f_bar.flatten())
+            # print (grad_norm)
+
+            # Abort?
+            if n_passive == 0 or grad_norm < epsilon:
+                print("Finished, iter=", i)
+                break
+
+            # Exact line search
+            # print (Q.dot(grad_f_bar).shape, grad_f_bar.shape)
+            alpha_den = np.vdot(grad_f_bar.flatten(), np.dot(Q, grad_f_bar).flatten())
+            alpha = grad_norm / alpha_den
+
+            # Update y
+            y_diff = -y.copy()
+            y -= alpha * grad_f_bar
+            y = np.maximum(y, 0.0)
+            y_diff += y
+
+            # Update gradient
+            grad_f += np.dot(Q, y_diff)
+
+        # Undo normalization
+        x = y / q_den
+
+        # Return
+        return x
+
+    def _run_classic(self, n_iter: int, epsilon: float = 1e-6):
+        X = np.asfortranarray(self.X)
+        L = (X**2).sum(axis=0)
         if sparse.issparse(self.X):
-            self.w = self._sparse_cd(
+            self.w = self._sparse_cd_classic(
                 self.X.data, self.X.indices, self.X.indptr, self.y, L, n_iter
             )
         else:
-            self.w = self._cd(self.X, self.y, L, n_iter)
+            self.w = self._cd_classic(X, self.y, L, n_iter, epsilon)
 
     @staticmethod
     @njit
-    def _cd(X, y, L, n_iter):
+    def _cd_classic(X, y, L, n_iter, epsilon):
         n_features = X.shape[1]
         R = np.copy(y)
         w = np.zeros(n_features)
+        XTX = X.T.dot(X)
+        f = -X.T.dot(y)
         for _ in range(n_iter):
+            Hxf = np.dot(XTX, w) + f
+            # print (_, np.sum(np.abs(Hxf) <= epsilon)/n_features)
+            criterion_1 = np.all(Hxf >= -epsilon)
+            criterion_2 = np.all(Hxf[w > 0] <= epsilon)
+            if criterion_1 and criterion_2:
+                print("Finished, iter=", _)
+                break
             for j in range(n_features):
                 if L[j] == 0.0:
                     continue
@@ -90,7 +281,7 @@ class CDNNLS:
 
     @staticmethod
     @njit
-    def _sparse_cd(X_data, X_indices, X_indptr, y, L, n_iter):
+    def _sparse_cd_classic(X_data, X_indices, X_indptr, y, L, n_iter):
         n_features = len(X_indptr) - 1
         w = np.zeros(n_features)
         R = np.copy(y)
@@ -300,11 +491,12 @@ def _init_pipes_sampler(fit_instructions, veldisp, beams):
 
 def _calc_template_from_pipes(
     seg_id=None,
+    oversamp_seg_maps=None,
+    # seg_ids=None,
     posterior_dir=None,
     iteration=None,
     n_samples=None,
-    oversamp_seg_maps=None,
-    oversamp_factor=None,
+    # oversamp_factor=None,
     spec_wavs=None,
     beam_info=None,
     # beams=None,
@@ -312,10 +504,11 @@ def _calc_template_from_pipes(
     cont_only=False,
     rm_line=None,
 ):
-    import sys
-
+    # import sys
+    # seg_id = seg_ids[use_idx]
+    seg_id = int(seg_id)
     # print(seg_id, flush=True)
-    sys.stdout.flush()
+    # sys.stdout.flush()
     file = h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r")
     samples2d = np.array(file["samples2d"])
 
@@ -338,11 +531,12 @@ def _calc_template_from_pipes(
             stack_idxs = np.r_["0,2", *v["flat_slice"]]
             for ib in v["list_idx"]:
                 beam = beams_object[ib]
-                beam_seg = block_reduce(
-                    oversamp_seg_maps[ib] == int(seg_id),
-                    oversamp_factor,
-                    func=np.mean,
-                )
+                # beam_seg = block_reduce(
+                #     # oversamp_seg_maps[np.argmin() == int(seg_id),
+                #     oversamp_factor,
+                #     func=np.mean,
+                # )
+                beam_seg = oversamp_seg_maps[ib]
                 tmodel = beam.compute_model(
                     spectrum_1d=temp_resamp_1d,
                     thumb=beam.beam.direct * beam_seg,
@@ -428,6 +622,8 @@ class RegionsMultiBeam(MultiBeam):
             self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
             self.regions_seg_wcs = WCS(self.regions_seg_hdr)
 
+        self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
+
         self.run_name = run_name
         self.pipes_dir = pipes_dir
 
@@ -444,7 +640,7 @@ class RegionsMultiBeam(MultiBeam):
         fit_stacks=True,
         direct_images=None,
         temp_dir: PathLike | None = None,
-        memmap: bool = True,
+        memmap: bool = False,
         out_dir: PathLike | None = None,
         cpu_count=-1,
         **grizli_kwargs,
@@ -535,6 +731,9 @@ class RegionsMultiBeam(MultiBeam):
             self.fit_bg = False
             A = self.A_poly * 1
 
+        # print (self.regions_seg_ids)
+        # exit()
+
         # print(A.shape, self.A_bg.shape, self.A_poly.shape)
 
         test_post = h5py.File(
@@ -554,20 +753,36 @@ class RegionsMultiBeam(MultiBeam):
         if out_dir is None:
             out_dir = Path.cwd()
         out_dir.mkdir(exist_ok=True, parents=True)
-        if temp_dir is None:
-            temp_dir = Path.cwd()
-        temp_dir.mkdir(exist_ok=True, parents=True)
+        if memmap:
+            if temp_dir is None:
+                temp_dir = Path.cwd()
+            temp_dir.mkdir(exist_ok=True, parents=True)
 
-        oversamp_seg_maps = np.memmap(
-            temp_dir / "oversamp_seg.dat",
-            dtype=int,
-            mode="w+",
-            shape=(
-                self.N,
-                oversamp_factor * self.beams[0].beam.sh[0],
-                oversamp_factor * self.beams[0].beam.sh[1],
-            ),
-        )
+            oversamp_seg_maps = np.memmap(
+                temp_dir / "oversamp_seg.dat",
+                # dtype=int,
+                mode="w+",
+                shape=(
+                    self.n_regions,
+                    self.N,
+                    # oversamp_factor * self.beams[0].beam.sh[0],
+                    # oversamp_factor * self.beams[0].beam.sh[1],
+                    self.beams[0].beam.sh[0],
+                    self.beams[0].beam.sh[1],
+                ),
+            )
+        else:
+            oversamp_seg_maps = np.zeros(
+                (
+                    self.n_regions,
+                    self.N,
+                    # oversamp_factor * self.beams[0].beam.sh[0],
+                    # oversamp_factor * self.beams[0].beam.sh[1],
+                    self.beams[0].beam.sh[0],
+                    self.beams[0].beam.sh[1],
+                ),
+                # dtype=int,
+            )
         beam_info = {}
         start_idx = 0
 
@@ -589,25 +804,79 @@ class RegionsMultiBeam(MultiBeam):
             beam_wcs.wcs.cd /= oversamp_factor
             beam_wcs.wcs.crpix *= oversamp_factor
 
-            oversamp_seg_maps[i] = reproject_interp(
+            oversampled = reproject_interp(
                 (self.regions_seg_map, self.regions_seg_wcs),
                 beam_wcs,
-                oversamp_seg_maps[i].shape,
+                (
+                    oversamp_factor * self.beams[0].beam.sh[0],
+                    oversamp_factor * self.beams[0].beam.sh[1],
+                ),
                 return_footprint=False,
                 order=0,
             )
-            oversamp_seg_maps[i][~np.isfinite(oversamp_seg_maps[i])] = 0
+
+            # with SharedMemoryManager() as smm:
+            #     shm_in = smm.SharedMemory(size=cubes.nbytes)
+            #     shared_init_params = np.ndarray(
+            #         cubes.shape, dtype=cubes.dtype, buffer=shm_in.buf
+            #     )
+            #     shared_init_params[:] = cubes[:]
+            #         # print (shared_init_params.shape)
+
+            #         # if chunk_size is None:
+            #         #     chunk_size = n_samples // parallel
+            #         _indices = np.arange(n_samples)
+            #         array_indices = np.array_split(_indices, self.n_proc)
+
+            #         # cubes = rng.random((n_samples, self.ndim))
+            #         shm_out = smm.SharedMemory(
+            #             size=(np.dtype(float).itemsize * n_samples * n_output)
+            #         )
+            #         shared_model_atlas = np.ndarray(
+            #             (n_samples, n_output), dtype=float, buffer=shm_out.buf
+            #         )
+            #         # shared_model_atlas[:] = cubes[:]
+
+            #         with Pool(
+            #             processes=self.n_proc, initializer=tqdm.set_lock, initargs=(lock,)
+            #         ) as pool:
+            #             multi_fn = partial(
+            #                 self._shared_memory_worker,
+            #                 shared_init=shm_in.name,
+            #                 init_shape=shared_init_params.shape,
+            #                 shared_output=shm_out.name,
+            #                 output_shape=shared_model_atlas.shape,
+            #                 store_fn=store_fn,
+            #                 tqdm_list=shared_list,
+            #             )
+            #             pool.map(multi_fn, enumerate(array_indices))
+            #             self.model_atlas = shared_model_atlas.copy()
+            #             self.param_vectors = shared_init_params.copy()
+
+            for j, s in enumerate(self.regions_seg_ids):
+                oversamp_seg_maps[j][i] = block_reduce(
+                    oversampled == s,
+                    oversamp_factor,
+                    func=np.mean,
+                )
+        oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
 
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
         stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
         temp_offset = A.shape[0] - self.N + num_stacks
-        stacked_A = np.memmap(
-            temp_dir / "stacked_A.dat",
-            dtype=float,
-            mode="w+",
-            shape=(temp_offset + NTEMP, stacked_shape),
-        )
+        if memmap:
+            stacked_A = np.memmap(
+                temp_dir / "stacked_A.dat",
+                dtype=float,
+                mode="w+",
+                shape=(temp_offset + NTEMP, stacked_shape),
+            )
+        else:
+            stacked_A = np.zeros(
+                (temp_offset + NTEMP, stacked_shape),
+                dtype=float,
+            )
 
         # Offset for background
         if fit_background:
@@ -704,16 +973,18 @@ class RegionsMultiBeam(MultiBeam):
             result_callback = partial(
                 _format_results,
                 shared_arr=stacked_A[temp_offset:],
-                seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+                # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+                seg_ids=self.regions_seg_ids,
                 n_samples=n_samples,
             )
             sub_fn = partial(
                 _calc_template_from_pipes,
+                # seg_ids = self.regions_seg_ids,
                 posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
                 iteration=iteration,
                 n_samples=n_samples,
-                oversamp_seg_maps=oversamp_seg_maps,
-                oversamp_factor=oversamp_factor,
+                # oversamp_seg_maps=oversamp_seg_maps,
+                # oversamp_factor=oversamp_factor,
                 spec_wavs=spec_wavs,
                 beam_info=beam_info,
                 # beams=self.beams,
@@ -740,11 +1011,14 @@ class RegionsMultiBeam(MultiBeam):
                 # pool.map(sub_fn, self.regions_phot_cat["bin_id"])
                 # pool.map_async(sub_fn, self.regions_phot_cat["bin_id"], callback=result_callback, error_callback=print)
 
-                for s in self.regions_phot_cat["bin_id"]:
-                    # print (s)
+                for s_i, s in enumerate(self.regions_seg_ids):
+                    # print (s_i,s)
                     # print(pipes_sampler)
                     pool.apply_async(
-                        sub_fn, (s,), callback=result_callback, error_callback=print
+                        sub_fn,
+                        (s, oversamp_seg_maps[s_i]),
+                        callback=result_callback,
+                        error_callback=print,
                     )
                     # print (f"{s}_2")
                 pool.close()
@@ -795,19 +1069,77 @@ class RegionsMultiBeam(MultiBeam):
 
             print("Generating models... DONE")
             ok_temp = np.sum(stacked_A, axis=1) > 0
-            _, unique_idxs = np.unique(stacked_A, axis=0, return_index=True)
+            from time import time
+
+            # print ("Done sum")
+            # _, unique_idxs = np.unique(stacked_A, axis=0, return_index=True)
+            # # print ("Done unique")
+            # unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
+            # init_time = time()
+            # unique_temp = ~duplicated_rows(stacked_A)
+            # print (time()-init_time)
+            # init_time = time()
+
+            stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
+            # np.unique() finds identical items in a raveled array. To make it
+            # see each row as a single item, we create a view of each row as a
+            # byte string of length itemsize times number of columns in `ar`
+            ar_row_view = stacked_A_contig.view(
+                "|S%d" % (stacked_A_contig.itemsize * stacked_A_contig.shape[1])
+            )
+            _, unique_idxs = np.unique(ar_row_view, return_index=True)
             unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
+            # print (time()-init_time)
+            # exit()
+
+            # repeats = 5
+
+            # init_time = time()
+            # times_pandas = []
+            # for i in range(repeats):
+            #     duplicated_rows(stacked_A)
+            #     times_pandas.append(time()-init_time)
+            #     init_time = time()
+
+            # init_time = time()
+            # times_np = []
+            # for i in range(repeats):
+            #     numpy.unique(stacked_A, axis=0, return_index=True)
+            #     times_np.append(time()-init_time)
+            #     init_time = time()
+
+            # # times_pandas = timeit.timeit(
+            # #     "duplicated_rows(stacked_A)",
+            # #     globals=globals(),
+            # #     setup="from __main__ import stacked_A",
+            # #     number=5,
+            # # )
+            # print(
+            #     f"Pandas: {np.nanmedian(times_pandas):.3f} +/- {np.nanmedian(times_pandas):.3f}"
+            # )
+            # # times_np = timeit.timeit(
+            # #     "numpy.unique(stacked_A, axis=0, return_index=True)",
+            # #     setup="from __main__ import numpy, stacked_A",
+            # #     number=5,
+            # # )
+            # print(
+            #     f"Numpy: {np.nanmedian(times_np):.3f} +/- {np.nanmedian(times_np):.3f}"
+            # )
             ok_temp &= unique_temp
+            # print ("3")
             # print ("Unique,", np.nansum(unique_temp), stacked_A.shape)
             out_coeffs = np.zeros(stacked_A.shape[0])
             # print(ok_temp, ok_temp.shape, out_coeffs.shape)
             # print (stacked_fit_mask.shape,stacked_y.shape)
+            # print ("Done others")
             stacked_fit_mask &= np.isfinite(stacked_scif)
+            # print ("Done masking")
 
             # for row in stacked_A_temp:
             #     print (np.sum(row)>0)
 
             stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
+            # print ("Transposed")
             # print (stacked_A[:, stacked_fit_mask].shape)
             # print (stacked_A[:, stacked_fit_mask][ok_temp,:].shape)
             # print (stacked_Ax.shape, stacked_y.shape)
@@ -815,6 +1147,7 @@ class RegionsMultiBeam(MultiBeam):
             stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
 
             print("NNLS fitting...")
+            # exit()
             # print (stacked_Ax.shape, stacked_y.shape)
 
             if fit_background:
@@ -826,8 +1159,11 @@ class RegionsMultiBeam(MultiBeam):
                 #     stacked_Ax,
                 #     y + off,
                 # )  # , maxiter=1e4, atol=1e2)
+                # print (stacked_Ax.shape)
+                # exit()
                 nnls_solver = CDNNLS(stacked_Ax, y + off)
-                nnls_solver._run(1000)
+                # nnls_solver._run(stacked_Ax.shape[1]*3)
+                nnls_solver.run(n_iter=100)
                 coeffs = nnls_solver.w
                 # coeffs, rnorm = scipy.optimize.nnls(
                 #     stacked_Ax,
@@ -837,7 +1173,7 @@ class RegionsMultiBeam(MultiBeam):
                 # coeffs = _lsq_res.x
                 # print (f"Status: {_lsq_res.status}")
                 # coeffs = fe.fnnls(numpy.ascontiguousarray(stacked_Ax), numpy.ascontiguousarray(y + off))
-                # coeffs = solve_nnls(stacked_Ax, y + off)
+                # coeffs = solve_nnls(stacked_Ax, y + off, gtol=1e-10, max_iter=stacked_Ax.shape[1]*3)[0]
                 # tnt_result = tntnn(stacked_Ax, y+off, verbose=True)
                 # coeffs = tnt_result.x
                 coeffs[:num_stacks] -= off
@@ -880,16 +1216,18 @@ class RegionsMultiBeam(MultiBeam):
         result_callback = partial(
             _format_results,
             shared_arr=stacked_A[temp_offset:],
-            seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+            # seg_ids=np.asarray(self.regions_phot_cat["bin_id"], dtype=int),
+            seg_ids=self.regions_seg_ids,
             n_samples=n_samples,
         )
         sub_fn = partial(
             _calc_template_from_pipes,
+            # seg_ids = self.regions_seg_ids,
             posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
             iteration=best_iter,
             n_samples=n_samples,
-            oversamp_seg_maps=oversamp_seg_maps,
-            oversamp_factor=oversamp_factor,
+            # oversamp_seg_maps=oversamp_seg_maps,
+            # oversamp_factor=oversamp_factor,
             spec_wavs=spec_wavs,
             beam_info=beam_info,
             # beams=self.beams,
@@ -922,12 +1260,14 @@ class RegionsMultiBeam(MultiBeam):
             # print("Initialised")
             # pool.map(sub_fn, self.regions_phot_cat["bin_id"])
             # pool.map_async(sub_fn, self.regions_phot_cat["bin_id"], callback=result_callback, error_callback=print)
-
-            for s in self.regions_phot_cat["bin_id"]:
+            for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
                 # print (s)
                 # print(pipes_sampler)
                 pool.apply_async(
-                    sub_fn, (s,), callback=result_callback, error_callback=print
+                    sub_fn,
+                    (s, oversamp_seg_maps[s_i]),
+                    callback=result_callback,
+                    error_callback=print,
                 )
                 # print (f"{s}_2")
             pool.close()
