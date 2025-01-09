@@ -40,6 +40,18 @@ if __name__ == "__main__":
         / "classification_v1"
     )
 
+    v2_out_dir = (
+        root_dir
+        / "2024_08_16_A2744_v4"
+        / "grizli_home"
+        / "classification-stage-2"
+        / "catalogues"
+        / "compiled"
+    )
+
+    new_cat_name = "internal_full_1.fits"
+    v2_cat = Table.read(v2_out_dir / new_cat_name)
+
     img_path = (
         root_dir
         / "2024_08_16_A2744_v4"
@@ -71,20 +83,32 @@ if __name__ == "__main__":
     # sky = partial(sky.plot_hist, bins=np.arange(16.5,33.5,0.5), ax=ax)
     # print (np.nanmin(v1_cat["MAG_AUTO"]), np.nanmax(v1_cat["MAG_AUTO"])
 
-    sky_plot(v1_cat, v1_cat["V1_CLASS"] == 0, ax=ax, label="Full Sample")
+    # sky_plot(v1_cat, v1_cat["V1_CLASS"] == 0, ax=ax, label="Full Sample")
+    # sky_plot(
+    #     v1_cat,
+    #     (v1_cat["V1_CLASS"] > 0) & (v1_cat["V1_CLASS"] < 4),
+    #     ax=ax,
+    #     label="Extracted",
+    # )
+    # sky_plot(v1_cat, (v1_cat["V1_CLASS"] == 4), ax=ax, label="First Pass")
+    # sky_plot(v1_cat, v1_cat["V1_CLASS"] >= 5, ax=ax, label="Placeholder")
+
     sky_plot(
-        v1_cat,
-        (v1_cat["V1_CLASS"] > 0) & (v1_cat["V1_CLASS"] < 4),
+        v2_cat,
+        (v2_cat["Z_FLAG_ALL"] >= 9) & (~np.isfinite(v2_cat["zspec"])),
         ax=ax,
-        label="Extracted",
+        label="Secure",
     )
-    sky_plot(v1_cat, (v1_cat["V1_CLASS"] == 4), ax=ax, label="First Pass")
-    sky_plot(v1_cat, v1_cat["V1_CLASS"] >= 5, ax=ax, label="Placeholder")
 
     ax.set_xlabel(r"R.A.")
     ax.set_ylabel(r"Dec.")
     ax.legend()
 
-    plt.savefig(save_dir / "sample_sky_plot.pdf")
+    # plt.savefig(save_dir / "sample_sky_plot.pdf", dpi=600)
 
-    plt.show()
+    # plt.show()
+
+    for r in v2_cat["ID", "RA", "DEC"][
+        (v2_cat["Z_FLAG_ALL"] >= 9) & (~np.isfinite(v2_cat["zspec"]))
+    ]:
+        print(r[0], r[1], r[2])
