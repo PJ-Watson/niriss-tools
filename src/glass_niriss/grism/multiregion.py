@@ -582,6 +582,11 @@ class RegionsMultiBeam(MultiBeam):
         # stacked_shape=None,
         cont_only=False,
         rm_line=None,
+        # hdf5_path=None,
+        # shared_param_arr_name=None,
+        # param_arr_shape=None,
+        # rng=None,
+        rows=None,
     ):
         # import sys
         # seg_id = seg_ids[use_idx]
@@ -592,22 +597,44 @@ class RegionsMultiBeam(MultiBeam):
         seg_maps = np.ndarray(seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf)
         shm_temps = shared_memory.SharedMemory(name=shared_temps_name)
         temps_arr = np.ndarray(temps_shape, dtype=float, buffer=shm_temps.buf)
+        # shm_param_arr = shared_memory.SharedMemory(name=shared_param_arr_name)
+        # param_arr = np.ndarray(param_arr_shape, dtype=float, buffer=shm_param_arr.buf)
         # print (temps_arr.shape, stacked_shape)
         # print(seg_id, flush=True)
         # sys.stdout.flush()
-        file = h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r")
-        samples2d = np.array(file["samples2d"])
+        # with h5py.File(hdf5_path, "a") as record_file:
+        with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
+            samples2d = np.array(post_file["samples2d"])
+            # samples_selected = rng.choice(
+            #     np.array(post_file["samples2d"]), size=n_samples, replace=False
+            # )
+            # samples_selected = np.array(post_file["samples2d"])
+        # print (seg_idx, iteration * n_samples , (iteration + 1) * n_samples)
+        # print (samples_selected.shape)
+        # param_arr[
+        #     seg_idx, :, :
+        # ] = samples_selected
+        # record_file["data"][
+        #     seg_idx, iteration * n_samples : (iteration + 1) * n_samples, 0
+        # ] = iteration
+        # record_file["data"][
+        #     seg_idx, iteration * n_samples : (iteration + 1) * n_samples, 1
+        # ] = np.arange(n_samples)
 
         # template_section = np.zeros((n_samples, temps_arr.shape[1]))
 
-        for sample_i, sample_vec in enumerate(
-            samples2d[iteration * n_samples : (iteration + 1) * n_samples]
+        for sample_i, row in enumerate(
+            rows
+            # samples_selected
+            # samples2d[iteration * n_samples : (iteration + 1) * n_samples]
         ):
             # print (seg_id, sample_vec)
             # print (seg_idx, seg_id, sample_i, flush=True)
 
             temp_resamp_1d = pipes_sampler._sample(
-                sample_vec,
+                # sample_vec,
+                # samples_selected[row],
+                samples2d[row],
                 spec_wavs=spec_wavs,
                 cont_only=cont_only,
                 rm_line=rm_line,
@@ -784,19 +811,23 @@ class RegionsMultiBeam(MultiBeam):
 
         # print(A.shape, self.A_bg.shape, self.A_poly.shape)
 
-        test_post = h5py.File(
+        rng = np.random.default_rng()
+
+        with h5py.File(
             self.pipes_dir
             / "posterior"
             / self.run_name
             / f"{int(self.regions_phot_cat["bin_id"][0])}.h5",
             "r",
-        )
+        ) as test_post:
 
-        fit_info_str = test_post.attrs["fit_instructions"]
-        fit_info_str = fit_info_str.replace("array", "np.array")
-        fit_info_str = fit_info_str.replace("float", "np.float")
-        fit_info_str = fit_info_str.replace("np.np.", "np.")
-        fit_instructions = eval(fit_info_str)
+            fit_info_str = test_post.attrs["fit_instructions"]
+            fit_info_str = fit_info_str.replace("array", "np.array")
+            fit_info_str = fit_info_str.replace("float", "np.float")
+            fit_info_str = fit_info_str.replace("np.np.", "np.")
+            fit_instructions = eval(fit_info_str)
+            # print ("Samp vec 2d", test_post["samples2d"].shape[1])
+            n_fit_comps = test_post["samples2d"].shape[1]
 
         if out_dir is None:
             out_dir = Path.cwd()
@@ -1028,21 +1059,51 @@ class RegionsMultiBeam(MultiBeam):
             coeffs_tracker = []
             chi2_tracker = []
 
-            # output_hdf5 =
-            output_hdf5["data"].dims[0].label("seg_id")
-            output_hdf5["seg_ids"] = self.regions_seg_ids
-            output_hdf5["seg_ids"].make_scale()
-            output_hdf5["data"].dims[0].attach_scale(output_hdf5["seg_ids"])
+            # hdf5_path = (
+            #     f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
+            #     f"bins_{num_iters}iters_{n_samples}samples.hdf5"
+            # )
+
+            # shm_param_vec_array = smm.SharedMemory(
+            #     size=np.dtype(float).itemsize * (self.n_regions * n_samples * n_fit_comps)
+            # )
+            # param_vec_array = np.ndarray(
+            #     (self.n_regions, n_samples, n_fit_comps),
+            #     dtype=float,
+            #     buffer=shm_param_vec_array.buf,
+            # )
+            # param_vec_array.fill(0.0)
+            # # param_vec_array = (self.n_regions, num_iters * n_samples, n_fit_comps+3)
+
+            # with h5py.File(
+            #     hdf5_path,
+            #     "w",
+            # ) as output_hdf5:
+            #     # output_hdf5 =
+            #     # output_hdf5["data"].dims[0].label("seg_id")
+            #     # print(self.n_regions, num_iters * n_samples, n_fit_comps)
+            #     output_hdf5.create_dataset(
+            #         "data",
+            #         shape=(self.n_regions, num_iters * n_samples, n_fit_comps),
+            #         # shape=(self.n_regions, 6, n_fit_comps),
+            #         maxshape=(self.n_regions, None, n_fit_comps),
+            #         dtype=float
+            #     )
+            #     # print (output_hdf5["data"])
+            #     output_hdf5["seg_ids"] = self.regions_seg_ids
+            #     output_hdf5["seg_ids"].make_scale()
+            #     # output_hdf5["data"].dims[0].attach_scale(output_hdf5["seg_ids"])
 
             output_table = Table(
-                names=["iteration", "chi2"]
+                names=["iteration", "chi2", "rows"]
                 + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
                 + [
                     f"{p[0]}_{p[1]}"
                     for p in product(
                         self.regions_phot_cat["bin_id"], np.arange(n_samples)
                     )
-                ]
+                ],
+                dtype=[int, float, str] + [float] * stacked_A.shape[0],
             )
             # print(output_table)
             # print(len(output_table.colnames))
@@ -1050,12 +1111,20 @@ class RegionsMultiBeam(MultiBeam):
                 f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
                 f"bins_{num_iters}iters_{n_samples}samples.csv"
             )
-            print(output_table_path)
+            # print(output_table_path)
             output_table.write(output_table_path, overwrite=True, format="pandas.csv")
 
             iterations = np.arange(num_iters)
             for iteration in iterations:
-                print(f"Iteration {iteration}")
+                rows = rng.choice(
+                    np.arange(500, dtype=int), size=n_samples, replace=False
+                )
+                print(f"Iteration {iteration}, {rows=}")
+                # print (f"{[f"{r:0<3}" for r in rows]}")
+                # test_str = ";".join(f"{r:0>3}" for r in rows)
+                # print (";".join(f"{r:0>3}" for r in rows))
+                # test_ints = [int(s) for s in test_str.split(";")]
+                # print (test_str, test_ints)
 
                 # result_callback = partial(
                 #     _format_results,
@@ -1083,6 +1152,10 @@ class RegionsMultiBeam(MultiBeam):
                     # stacked_shape=stacked_shape,
                     cont_only=False,
                     rm_line=None,
+                    # shared_param_arr_name = shm_param_vec_array.name,
+                    # param_arr_shape = param_vec_array.shape,
+                    # rows=rng.random.choice(np.arange(), replace=F),
+                    rows=rows,
                 )
 
                 # result_callback = partial(_print_id, dummy_var="test")
@@ -1164,6 +1237,7 @@ class RegionsMultiBeam(MultiBeam):
                 ok_temp = np.sum(stacked_A, axis=1) > 0
                 from time import time
 
+                # exit()
                 # print ("Done sum")
                 # _, unique_idxs = np.unique(stacked_A, axis=0, return_index=True)
                 # # print ("Done unique")
@@ -1300,8 +1374,34 @@ class RegionsMultiBeam(MultiBeam):
 
                 # coeffs_tracker.append(out_coeffs)
                 # chi2_tracker.append(chi2)#
+                # with h5py.File(
+                #     hdf5_path,
+                #     "w",
+                # ) as output_hdf5:
+                #     # output_hdf5 =
+                #     # output_hdf5["data"].dims[0].label("seg_id")
+                #     # print(self.n_regions, num_iters * n_samples, n_fit_comps)
+                #     output_hdf5["data"][:,iteration*n_samples:(iteration+1)*n_sammples,:] = param_vec_array
+                #     # output_hdf5["data"][:,iteration*n_samples:(iteration+1)*n_sammples,] = iteration
+                #     # output_hdf5["data"][:,iteration*n_samples:(iteration+1)*n_sammples,1] = chi2
 
-                output_table.add_row([iteration, chi2, *out_coeffs])
+                #     # .create_dataset(
+                #     #     "data",
+                #     #     shape=(self.n_regions, num_iters * n_samples, n_fit_comps+3),
+                #     #     # shape=(self.n_regions, 6, n_fit_comps),
+                #     #     maxshape=(self.n_regions, None, n_fit_comps+3),
+                #     #     dtype=float
+                #     # )
+                #     # # print (output_hdf5["data"])
+                #     # output_hdf5["seg_ids"] = self.regions_seg_ids
+                #     # output_hdf5["seg_ids"].make_scale()
+                #     # output_hdf5["data"].dims[0].attach_scale(output_hdf5["seg_ids"])
+
+                # param_vec_array.fill(0.)
+
+                output_table.add_row(
+                    [iteration, chi2, ";".join(f"{r:0>3}" for r in rows), *out_coeffs]
+                )
                 output_table.write(output_table_path, overwrite=True)
                 print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
                 stacked_A[temp_offset:].fill(0.0)
@@ -1326,7 +1426,7 @@ class RegionsMultiBeam(MultiBeam):
                 shared_temps_name=shm_stacked_A.name,
                 temps_shape=stacked_A.shape,
                 posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
-                iteration=best_iter,
+                # iteration=best_iter,
                 n_samples=n_samples,
                 spec_wavs=spec_wavs,
                 beam_info=beam_info,
@@ -1349,6 +1449,7 @@ class RegionsMultiBeam(MultiBeam):
                 #     "N  2  6548.05A",
                 # ],
                 # rm_line="H  1  4861.33A",
+                rows=[int(s) for s in output_table["rows"][best_iter].split(";")],
             )
 
             # result_callback = partial(_print_id, dummy_var="test")
@@ -1379,7 +1480,7 @@ class RegionsMultiBeam(MultiBeam):
                 # wait for all tasks to complete and processes to close
                 pool.join()
 
-        out_coeffs = np.array(output_table[best_iter][2:])
+        out_coeffs = np.array(output_table[best_iter][3:])
         stacked_modelf = np.dot(out_coeffs, stacked_A)
         # print(chi2_tracker)
         print(best_iter, output_table[best_iter])
@@ -1414,11 +1515,11 @@ class RegionsMultiBeam(MultiBeam):
                         avg_rms = 1 / np.nanmedian(
                             np.sqrt(stacked_ivarf[slice_plot][clip])
                         )
-                        print("rms", avg_rms)
-                        print(np.nanmedian(np.sqrt(wht_i[clip])))
-                        print(np.nanmedian(wht_i[clip]))
-                        print(np.nanmedian(stacked_ivarf[slice_plot][clip]))
-                        print(np.nanmedian(1 / stacked_ivarf[slice_plot][clip]))
+                        # print("rms", avg_rms)
+                        # print(np.nanmedian(np.sqrt(wht_i[clip])))
+                        # print(np.nanmedian(wht_i[clip]))
+                        # print(np.nanmedian(stacked_ivarf[slice_plot][clip]))
+                        # print(np.nanmedian(1 / stacked_ivarf[slice_plot][clip]))
 
                         data_list = [
                             stacked_scif[slice_plot],
@@ -1476,10 +1577,10 @@ class RegionsMultiBeam(MultiBeam):
         else:
             poly_coeffs = out_coeffs[: self.n_poly]
 
-        print(self.n_poly, self.N)
-        print(num_stacks)
-        print(f"{out_coeffs=}")
-        print(poly_coeffs, self.x_poly)
+        # print(self.n_poly, self.N)
+        # print(num_stacks)
+        # print(f"{out_coeffs=}")
+        # print(poly_coeffs, self.x_poly)
         self.y_poly = np.dot(poly_coeffs, self.x_poly)
         # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
 
