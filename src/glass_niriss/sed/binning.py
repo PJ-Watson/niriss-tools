@@ -591,9 +591,7 @@ def bin_and_save(
     )
 
     # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
-    binned_name = (
-        f"{obj_id}_{"hexbin" if use_hex else "vorbin"}_{bin_diameter}_{target_sn}"
-    )
+    binned_name = f"{obj_id}_{"hexbin" if use_hex else "vorbin"}_{bin_diameter}_{target_sn}_{sn_filter}"
 
     save_path = out_dir / f"{binned_name}_data.fits"
     if save_path.is_file() and not overwrite:
