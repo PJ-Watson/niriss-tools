@@ -31,7 +31,11 @@ from pandas.core import algorithms
 from pandas.core.sorting import get_group_index
 from reproject import reproject_interp
 
-from glass_niriss.grism.specgen import ExtendedModelGalaxy
+from glass_niriss.grism.specgen import (
+    CLOUDY_LINE_MAP,
+    ExtendedModelGalaxy,
+    check_coverage,
+)
 
 # def duplicated_rows(a, keep="first"):
 #     size_hint = min(a.shape[0], SIZE_HINT_LIMIT)
@@ -728,7 +732,9 @@ class RegionsMultiBeam(MultiBeam):
         temp_dir: PathLike | None = None,
         memmap: bool = False,
         out_dir: PathLike | None = None,
-        cpu_count=-1,
+        cpu_count: int = -1,
+        overwrite: bool = False,
+        use_lines: dict = CLOUDY_LINE_MAP,
         **grizli_kwargs,
     ):
         """
@@ -782,6 +788,21 @@ class RegionsMultiBeam(MultiBeam):
             the current working directory will be used.
         cpu_count : int, optional
             The number of CPUs to use for multiprocessing, by default -1.
+        overwrite : bool, optional
+            If ``True``, overwrite any existing fit. By default ``False``,
+            and will attempt to load a previous fit.
+        use_lines : ArrayLike, optional
+            A list of lines, for which a 2D map will be generated based on
+            the multi-region fit. Each item in the list should be a
+            ``dict``, containing the following keys:
+
+            * ``"cloudy"`` : The name of one or more lines following the
+              ``Cloudy`` nomenclature
+              (`Ferland+17 <https://ui.adsabs.harvard.edu/abs/2017RMxAA..53..385F/abstract>`__).
+            * ``"grizli"`` : The name of the emission line in `grizli`, or
+              any other desired name.
+            * ``"wave"`` : The rest-frame vacuum wavelength of the line.
+
         **grizli_kwargs : dict, optional
             A catch-all for previous `grizli` keywords. These are
             redundant in the multiregion method, and are kept only to
@@ -1025,130 +1046,151 @@ class RegionsMultiBeam(MultiBeam):
                 f"bins_{num_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.csv"
             )
 
-            output_table.write(output_table_path, overwrite=True, format="pandas.csv")
+            print(
+                ~output_table_path.is_file(),
+                overwrite,
+                (~output_table_path.is_file()) or (overwrite),
+            )
 
-            iterations = np.arange(num_iters)
-            for iteration in iterations:
-                rows = rng.choice(
-                    np.arange(500, dtype=int), size=n_samples, replace=False
-                )
-                print(f"Iteration {iteration}, {rows=}")
+            if (not output_table_path.is_file()) or (overwrite):
 
-                # !! This can be placed outside the iteration loop
-                sub_fn = partial(
-                    self._gen_stacked_templates_from_pipes,
-                    shared_seg_name=shm_seg_maps.name,
-                    seg_maps_shape=oversamp_seg_maps.shape,
-                    shared_models_name=shm_stacked_A.name,
-                    models_shape=stacked_A.shape,
-                    posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
-                    n_samples=n_samples,
-                    spec_wavs=spec_wavs,
-                    beam_info=beam_info,
-                    temp_offset=temp_offset,
-                    cont_only=False,
-                    rm_line=None,
-                    rows=rows,
+                output_table.write(
+                    output_table_path, overwrite=True, format="pandas.csv"
                 )
 
-                print("Generating models...")
-                with multiprocessing.Pool(
-                    processes=cpu_count,
-                    initializer=_init_pipes_sampler,
-                    initargs=(
-                        fit_instructions,
-                        veldisp,
-                        self.beams,
-                    ),
-                ) as pool:
-                    for s_i, s in enumerate(self.regions_seg_ids):
-                        pool.apply_async(
-                            sub_fn,
-                            (s_i, s),
-                            error_callback=print,
-                        )
-                    pool.close()
-                    pool.join()
+                iterations = np.arange(num_iters)
+                for iteration in iterations:
+                    rows = rng.choice(
+                        np.arange(500, dtype=int), size=n_samples, replace=False
+                    )
+                    print(f"Iteration {iteration}, {rows=}")
 
-                print("Generating models... DONE")
-                ok_temp = np.sum(stacked_A, axis=1) > 0
-                from time import time
+                    # !! This can be placed outside the iteration loop
+                    sub_fn = partial(
+                        self._gen_stacked_templates_from_pipes,
+                        shared_seg_name=shm_seg_maps.name,
+                        seg_maps_shape=oversamp_seg_maps.shape,
+                        shared_models_name=shm_stacked_A.name,
+                        models_shape=stacked_A.shape,
+                        posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
+                        n_samples=n_samples,
+                        spec_wavs=spec_wavs,
+                        beam_info=beam_info,
+                        temp_offset=temp_offset,
+                        cont_only=False,
+                        rm_line=None,
+                        rows=rows,
+                    )
 
-                stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
-                # np.unique() finds identical items in a raveled array. To make it
-                # see each row as a single item, we create a view of each row as a
-                # byte string of length itemsize times number of columns in `ar`
-                ar_row_view = stacked_A_contig.view(
-                    "|S%d" % (stacked_A_contig.itemsize * stacked_A_contig.shape[1])
-                )
-                _, unique_idxs = np.unique(ar_row_view, return_index=True)
-                unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
+                    print("Generating models...")
+                    with multiprocessing.Pool(
+                        processes=cpu_count,
+                        initializer=_init_pipes_sampler,
+                        initargs=(
+                            fit_instructions,
+                            veldisp,
+                            self.beams,
+                        ),
+                    ) as pool:
+                        for s_i, s in enumerate(self.regions_seg_ids):
+                            pool.apply_async(
+                                sub_fn,
+                                (s_i, s),
+                                # error_callback=print,
+                            )
+                        pool.close()
+                        pool.join()
 
-                ok_temp &= unique_temp
-                out_coeffs = np.zeros(stacked_A.shape[0])
-                stacked_fit_mask &= np.isfinite(stacked_scif)
-                stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
-                # Weight by ivar
-                stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
+                    print("Generating models... DONE")
+                    ok_temp = np.sum(stacked_A, axis=1) > 0
+                    from time import time
 
-                print("NNLS fitting...")
+                    stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
+                    # np.unique() finds identical items in a raveled array. To make it
+                    # see each row as a single item, we create a view of each row as a
+                    # byte string of length itemsize times number of columns in `ar`
+                    ar_row_view = stacked_A_contig.view(
+                        "|S%d" % (stacked_A_contig.itemsize * stacked_A_contig.shape[1])
+                    )
+                    _, unique_idxs = np.unique(ar_row_view, return_index=True)
+                    unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
 
-                if fit_background:
-                    y = stacked_scif[stacked_fit_mask] + off
-                    y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
-                    # # y_fit = stacked_y[stacked_fit_mask] + off
-                    # # y_fit = stacked_y[stacked_fit_mask] + off
-                    # coeffs, rnorm = scipy.optimize.nnls(
-                    #     stacked_Ax,
-                    #     y + off,
-                    # )  # , maxiter=1e4, atol=1e2)
-                    # print (stacked_Ax.shape)
-                    # exit()
-                    nnls_solver = CDNNLS(stacked_Ax, y + off)
-                    # nnls_solver._run(stacked_Ax.shape[1]*3)
-                    nnls_solver.run(n_iter=100)
-                    coeffs = nnls_solver.w
-                    # coeffs, rnorm = scipy.optimize.nnls(
-                    #     stacked_Ax,
-                    #     y + off,
-                    # )  # , maxiter=1e4, atol=1e2)
-                    # _lsq_res = scipy.optimize.lsq_linear(stacked_Ax, y + off, bounds=(0, np.inf), method='bvls', verbose=1)
-                    # coeffs = _lsq_res.x
-                    # print (f"Status: {_lsq_res.status}")
-                    # coeffs = fe.fnnls(numpy.ascontiguousarray(stacked_Ax), numpy.ascontiguousarray(y + off))
-                    # coeffs = solve_nnls(stacked_Ax, y + off, gtol=1e-10, max_iter=stacked_Ax.shape[1]*3)[0]
-                    # tnt_result = tntnn(stacked_Ax, y+off, verbose=True)
-                    # coeffs = tnt_result.x
-                    coeffs[:num_stacks] -= off
-                else:
-                    y = self.scif[self.fit_mask]
-                    y *= np.sqrt(self.ivarf[self.fit_mask])
-
-                    coeffs, rnorm = scipy.optimize.nnls(Ax, y)
-
-                    Ax = A[:, self.fit_mask][ok_temp, :].T
+                    ok_temp &= unique_temp
+                    out_coeffs = np.zeros(stacked_A.shape[0])
+                    stacked_fit_mask &= np.isfinite(stacked_scif)
+                    stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
                     # Weight by ivar
-                    Ax *= np.sqrt(self.ivarf[self.fit_mask][:, np.newaxis])
+                    stacked_Ax *= np.sqrt(
+                        stacked_ivarf[stacked_fit_mask][:, np.newaxis]
+                    )
 
-                print("NNLS fitting... DONE")
-                out_coeffs[ok_temp] = coeffs
-                stacked_modelf = np.dot(out_coeffs, stacked_A)
-                chi2 = np.nansum(
-                    (
-                        stacked_weightf
-                        * (stacked_scif - stacked_modelf) ** 2
-                        * stacked_ivarf
-                    )[stacked_fit_mask]
-                )
+                    print("NNLS fitting...")
 
-                output_table.add_row(
-                    [iteration, chi2, ";".join(f"{r:0>3}" for r in rows), *out_coeffs]
-                )
-                output_table.write(output_table_path, overwrite=True)
-                print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
-                stacked_A[temp_offset:].fill(0.0)
+                    if fit_background:
+                        y = stacked_scif[stacked_fit_mask] + off
+                        y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
+                        # # y_fit = stacked_y[stacked_fit_mask] + off
+                        # # y_fit = stacked_y[stacked_fit_mask] + off
+                        # coeffs, rnorm = scipy.optimize.nnls(
+                        #     stacked_Ax,
+                        #     y + off,
+                        # )  # , maxiter=1e4, atol=1e2)
+                        # print (stacked_Ax.shape)
+                        # exit()
+                        nnls_solver = CDNNLS(stacked_Ax, y + off)
+                        # nnls_solver._run(stacked_Ax.shape[1]*3)
+                        nnls_solver.run(n_iter=100)
+                        coeffs = nnls_solver.w
+                        # coeffs, rnorm = scipy.optimize.nnls(
+                        #     stacked_Ax,
+                        #     y + off,
+                        # )  # , maxiter=1e4, atol=1e2)
+                        # _lsq_res = scipy.optimize.lsq_linear(stacked_Ax, y + off, bounds=(0, np.inf), method='bvls', verbose=1)
+                        # coeffs = _lsq_res.x
+                        # print (f"Status: {_lsq_res.status}")
+                        # coeffs = fe.fnnls(numpy.ascontiguousarray(stacked_Ax), numpy.ascontiguousarray(y + off))
+                        # coeffs = solve_nnls(stacked_Ax, y + off, gtol=1e-10, max_iter=stacked_Ax.shape[1]*3)[0]
+                        # tnt_result = tntnn(stacked_Ax, y+off, verbose=True)
+                        # coeffs = tnt_result.x
+                        coeffs[:num_stacks] -= off
+                    else:
+                        y = self.scif[self.fit_mask]
+                        y *= np.sqrt(self.ivarf[self.fit_mask])
 
-            del stacked_Ax
+                        coeffs, rnorm = scipy.optimize.nnls(Ax, y)
+
+                        Ax = A[:, self.fit_mask][ok_temp, :].T
+                        # Weight by ivar
+                        Ax *= np.sqrt(self.ivarf[self.fit_mask][:, np.newaxis])
+
+                    print("NNLS fitting... DONE")
+                    out_coeffs[ok_temp] = coeffs
+                    stacked_modelf = np.dot(out_coeffs, stacked_A)
+                    chi2 = np.nansum(
+                        (
+                            stacked_weightf
+                            * (stacked_scif - stacked_modelf) ** 2
+                            * stacked_ivarf
+                        )[stacked_fit_mask]
+                    )
+
+                    output_table.add_row(
+                        [
+                            iteration,
+                            chi2,
+                            ";".join(f"{r:0>3}" for r in rows),
+                            *out_coeffs,
+                        ]
+                    )
+                    output_table.write(output_table_path, overwrite=True)
+                    print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
+                    stacked_A[temp_offset:].fill(0.0)
+
+                del stacked_Ax
+
+            else:
+                print("Loading previous fit...")
+                output_table = Table.read(output_table_path, format="pandas.csv")
 
             best_iter = np.argmin(output_table["chi2"])
 
@@ -1173,51 +1215,8 @@ class RegionsMultiBeam(MultiBeam):
                 buffer=shm_beam_models.buf,
             )
 
-            line_map = [
-                {
-                    "bagpipes": [
-                        "Blnd  3726.00A",
-                        "Blnd  3729.00A",
-                    ],
-                    "grizli": "OII",
-                    "wave": 3728,
-                },
-                {
-                    "bagpipes": ["H  1  4861.33A"],
-                    "grizli": "Hb",
-                    "wave": 4861.33,
-                },
-                {
-                    "bagpipes": [
-                        "O  3  5006.84A",
-                    ],
-                    "grizli": "OIII-5007",
-                    "wave": 5006.84,
-                },
-                {
-                    "bagpipes": [
-                        "H  1  6562.81A",
-                        "N  2  6583.45A",
-                        "N  2  6548.05A",
-                    ],
-                    "grizli": "Ha",
-                    "wave": 6562.81,
-                    # "wave": 6564.5,
-                },
-                # {
-                #     "bagpipes": [
-                #         "O  3  5006.84A",
-                #     ],
-                #     "grizli": "OIII-5007",
-                #     "wave": 5006.84,
-                # },
-                # [
-                #     "O  3  5006.84A",
-                #     "O  3  4958.91A"
-                # ]
-            ]
-
             line_hdu = None
+            saved_lines = []
 
             sub_fn = partial(
                 self._gen_beam_templates_from_pipes,
@@ -1235,7 +1234,13 @@ class RegionsMultiBeam(MultiBeam):
                 coeffs=output_table[best_iter],
             )
 
-            for l_i, l_v in enumerate(line_map):
+            for l_i, l_v in enumerate(use_lines):
+
+                if not check_coverage(l_v["wave"] * (1 + z)):
+                    continue
+
+                print(f"Generating map for {l_v["grizli"]}...")
+
                 flat_beam_models.fill(0.0)
 
                 with multiprocessing.Pool(
@@ -1247,7 +1252,7 @@ class RegionsMultiBeam(MultiBeam):
                         pool.apply_async(
                             sub_fn,
                             args=(s_i, s),
-                            kwds={"rm_line": l_v["bagpipes"]},
+                            kwds={"rm_line": l_v["cloudy"]},
                             error_callback=print,
                         )
                     pool.close()
@@ -1271,24 +1276,45 @@ class RegionsMultiBeam(MultiBeam):
                     # wave=line_wave_obs,
                     wave=l_v["wave"] * (1 + z),
                     fcontam=self.fcontam,
-                    pixscale=0.03,
+                    pixscale=0.04,
                     pixfrac=1.0,
                     size=5,
                     kernel="lanczos3",
                 )
 
                 hdu[0].header["REDSHIFT"] = (z, "Redshift used")
+                hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
                 # for e in [3,4,5,6]:
                 for e in [-4, -3, -2, -1]:
                     hdu[e].header["EXTVER"] = l_v["grizli"]
                     hdu[e].header["REDSHIFT"] = (z, "Redshift used")
                     hdu[e].header["RESTWAVE"] = (l_v["wave"], "Line rest wavelength")
 
+                saved_lines.append(l_v["grizli"])
+
                 if line_hdu is None:
                     line_hdu = hdu
+                    line_hdu[0].header["NUMLINES"] = (1, "Number of lines in this file")
                 else:
                     line_hdu.extend(hdu[-4:])
+                    line_hdu[0].header["NUMLINES"] += 1
 
+                    # Make sure DSCI extension is filled.  Can be empty for
+                    # lines at the edge of the grism throughput
+                    for f_i in range(hdu[0].header["NDFILT"]):
+                        filt_i = hdu[0].header["DFILT{0:02d}".format(f_i + 1)]
+                        if hdu["DWHT", filt_i].data.max() != 0:
+                            line_hdu["DSCI", filt_i] = hdu["DSCI", filt_i]
+                            line_hdu["DWHT", filt_i] = hdu["DWHT", filt_i]
+
+                li = line_hdu[0].header["NUMLINES"]
+                line_hdu[0].header["LINE{0:03d}".format(li)] = l_v["grizli"]
+
+        if line_hdu is not None:
+            line_hdu[0].header["HASLINES"] = (
+                " ".join(saved_lines),
+                "Lines in this file",
+            )
         # print(hdu)
         # hdu.info()
         # new_hdul = fits.HDUList(

@@ -15,7 +15,116 @@ from numpy.typing import ArrayLike
 
 # from bagpipes.models.nebular_model import nebular
 
-__all__ = ["ExtendedModelGalaxy"]
+__all__ = ["ExtendedModelGalaxy", "CLOUDY_LINE_MAP", "check_coverage"]
+
+CLOUDY_LINE_MAP = [
+    {
+        "cloudy": [
+            "H  1  1.28180m",
+        ],
+        "grizli": "PaB",
+        "wave": 12821.7,
+    },
+    {
+        "cloudy": [
+            "TOTL  1.08303m",
+        ],
+        "grizli": "HeI-1083",
+        "wave": 10830.3,
+    },
+    {
+        "cloudy": [
+            "S  3  9530.62A",
+        ],
+        "grizli": "SIII-9530",
+        "wave": 9530.62,
+    },
+    {
+        "cloudy": [
+            "S  3  9068.62A",
+        ],
+        "grizli": "SIII-9068",
+        "wave": 9068.62,
+    },
+    {
+        "cloudy": [
+            "S  2  6730.82A",
+            "S  2  6716.44A",
+        ],
+        "grizli": "SII",
+        "wave": 6725.48,
+    },
+    {
+        "cloudy": [
+            "H  1  6562.81A",
+            "N  2  6583.45A",
+            "N  2  6548.05A",
+        ],
+        "grizli": "Ha",
+        "wave": 6564.697,
+    },
+    {
+        "cloudy": [
+            "O  3  5006.84A",
+        ],
+        "grizli": "OIII-5007",
+        "wave": 5008.240,
+    },
+    {
+        "cloudy": ["H  1  4861.33A"],
+        "grizli": "Hb",
+        "wave": 4862.738,
+    },
+    {
+        "cloudy": ["Blnd  4363.00A"],
+        "grizli": "OIII-4363",
+        "wave": 4364.436,
+    },
+    {
+        "cloudy": [
+            "Blnd  3726.00A",
+            "Blnd  3729.00A",
+        ],
+        "grizli": "OII",
+        "wave": 3728.48,
+    },
+]
+
+# In Angstroms
+NIRISS_FILTER_LIMITS = {
+    "F090W": [7960, 10050],
+    "F115W": [10130, 12830],
+    "F150W": [13300, 16710],
+    "F200W": [17510, 22260],
+}
+
+
+def check_coverage(obs_wavelength: float, filter_limits: dict = NIRISS_FILTER_LIMITS):
+    """
+    Check if a line is covered by the NIRISS filters.
+
+    Parameters
+    ----------
+    obs_wavelength : float
+        The observed wavelength of the line.
+    filter_limits : dict, optional
+        A dictionary, where the keys are the names of the grism filters,
+        and the values are array-like, containing
+        ``[min_wavelength, max_wavelength]``. Defaults to
+        ``NIRISS_FILTER_LIMITS``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the line falls within the filter coverage, else
+        ``False``.
+    """
+
+    for k, v in filter_limits.items():
+        if (obs_wavelength >= v[0]) and (obs_wavelength <= v[-1]):
+            return True
+
+    return False
 
 
 # T
@@ -349,3 +458,88 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         self.line_fluxes = dict(zip(config.line_names, em_lines))
 
         self.spectrum_full = spectrum
+
+    def _calculate_spectrum(self, model_comp):
+        """
+        This method generates predictions for observed spectroscopy.
+
+        It optionally applies a Gaussian velocity dispersion then
+        resamples onto the specified set of observed wavelengths.
+        It has been modified to use vacuum wavelengths before the final
+        resampling stage.
+
+        """
+
+        zplusone = model_comp["redshift"] + 1.0
+
+        if "veldisp" in list(model_comp):
+            vres = 3 * 10**5 / config.R_spec / 2.0
+            sigma_pix = model_comp["veldisp"] / vres
+            k_size = 4 * int(sigma_pix + 1)
+            x_kernel_pix = np.arange(-k_size, k_size + 1)
+
+            kernel = np.exp(-(x_kernel_pix**2) / (2 * sigma_pix**2))
+            kernel /= np.trapz(kernel)  # Explicitly normalise kernel
+
+            spectrum = np.convolve(self.spectrum_full, kernel, mode="valid")
+            redshifted_wavs = zplusone * self.wavelengths[k_size:-k_size]
+
+        else:
+            spectrum = self.spectrum_full
+            redshifted_wavs = zplusone * self.wavelengths
+
+        if "R_curve" in list(model_comp):
+            oversample = 4  # Number of samples per FWHM at resolution R
+            new_wavs = self._get_R_curve_wav_sampling(oversample=oversample)
+
+            # spectrum = np.interp(new_wavs, redshifted_wavs, spectrum)
+            spectrum = spectres.spectres(new_wavs, redshifted_wavs, spectrum, fill=0)
+            redshifted_wavs = new_wavs
+
+            sigma_pix = oversample / 2.35  # sigma width of kernel in pixels
+            k_size = 4 * int(sigma_pix + 1)
+            x_kernel_pix = np.arange(-k_size, k_size + 1)
+
+            kernel = np.exp(-(x_kernel_pix**2) / (2 * sigma_pix**2))
+            kernel /= np.trapz(kernel)  # Explicitly normalise kernel
+
+            # Disperse non-uniformly sampled spectrum
+            spectrum = np.convolve(spectrum, kernel, mode="valid")
+            redshifted_wavs = redshifted_wavs[k_size:-k_size]
+
+        # Converted to using spectres in response to issue with interp,
+        # see https://github.com/ACCarnall/bagpipes/issues/15
+        # fluxes = np.interp(self.spec_wavs, redshifted_wavs,
+        #                    spectrum, left=0, right=0)
+
+        vac_redshifted_wavs = self.air_to_vac(redshifted_wavs)
+        fluxes = spectres.spectres(
+            self.spec_wavs, vac_redshifted_wavs, spectrum, fill=0
+        )
+
+        if self.spec_units == "mujy":
+            fluxes /= 10**-29 * 2.9979 * 10**18 / self.spec_wavs**2
+
+        self.spectrum = np.c_[self.spec_wavs, fluxes]
+
+    @staticmethod
+    def air_to_vac(wavelength: ArrayLike):
+        """
+        Convert air to vacuum wavelengths.
+
+        Implements the air to vacuum wavelength conversion described in eqn 65 of
+        Griesen 2006.
+
+        TODO: check against most recent specutils conversions.
+
+        Parameters
+        ----------
+        wavelength : ArrayLike
+            The wavelengths in Angstroms.
+        """
+        # wlum = wavelength.to(u.um).value
+        wlum = wavelength[wavelength >= 2e4] / 1e4
+        wavelength[wavelength >= 2e4] = (
+            1 + 1e-6 * (287.6155 + 1.62887 / wlum**2 + 0.01360 / wlum**4)
+        ) * wavelength[wavelength >= 2e4]
+        return wavelength

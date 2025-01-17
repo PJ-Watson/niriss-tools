@@ -503,6 +503,7 @@ def bin_and_save(
     use_hex: bool = True,
     bin_diameter: float = 4,
     seg_hdu_index: int | str = 0,
+    padding: int = 50,
     overwrite: bool = False,
     **bin_kwargs,
 ) -> PathLike:
@@ -552,6 +553,8 @@ def bin_and_save(
     seg_hdu_index : int | str, optional
         The index or name of the HDU containing the segmentation map,
         by default ``0``.
+    padding : int, optional
+        The extra padding to add to the object boundaries, by default 50.
     overwrite : bool, optional
         If a catalogue already exists in ``out_dir``, this determines if
         it should be written over. By default ``False``.
@@ -570,7 +573,7 @@ def bin_and_save(
 
     from glass_niriss.pipeline import seg_slice
 
-    obj_img_idxs = seg_slice(seg_map, obj_id)
+    obj_img_idxs = seg_slice(seg_map, obj_id, padding=padding)
 
     signal = fits.getdata(info_dict[sn_filter]["sci"])[obj_img_idxs]
     signal_hdr = fits.getheader(info_dict[sn_filter]["sci"])
