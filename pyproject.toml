@@ -36,6 +36,7 @@ docs = [
     "sphinx-copybutton>=0.5",
     "sphinx>=8.0",
     "numpydoc>=1.8",
+    "sphinx-astropy>=1.9.1"
 ]
 grizli = [
     "grizli[jwst]"
