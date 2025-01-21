@@ -25,7 +25,8 @@ dependencies = [
     "matplotlib>=3.9",
     # "tqdm>=4.66",
     "scipy>=1.13",
-    "Cython>=3"
+    "Cython>=3",
+    "vorbin"
 ]
 
 [project.optional-dependencies]
