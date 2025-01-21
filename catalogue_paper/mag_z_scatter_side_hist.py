@@ -1,3 +1,7 @@
+"""
+Show galaxies in the magnitude-redshift plane.
+"""
+
 import plot_utils
 from default_imports import *
 
@@ -34,61 +38,51 @@ if __name__ == "__main__":
     new_cat_name = "internal_full_1.fits"
     v2_cat = Table.read(v2_out_dir / new_cat_name)
 
-    fig, ax = plt.subplots(
-        figsize=(plot_utils.aanda_columnwidth, plot_utils.aanda_columnwidth / 1.62),
+    # fig, ax = plt.subplots(
+    fig = plt.figure(
+        figsize=(plot_utils.aanda_textwidth, plot_utils.aanda_textwidth / 1.62),
         constrained_layout=True,
     )
+
+    gs = fig.add_gridspec(2, 2, width_ratios=(3, 1), height_ratios=(1, 2))
+    ax_scatter = fig.add_subplot(gs[1, 0])
 
     secure = v2_cat["Z_FLAG_ALL"] >= 9
     tentative = (v2_cat["Z_FLAG_ALL"] == 7) | (v2_cat["Z_FLAG_ALL"] == 6)
 
-    z_bins = np.arange(0, 4, 0.05)
+    z_bins = np.arange(0, 4, 0.025)
 
-    ax.scatter(
+    ax_scatter.scatter(
         v2_cat["Z_EST_ALL"][secure],
         v2_cat["MAG_AUTO"][secure],
         color="k",
-        alpha=.7,
+        alpha=0.7,
         edgecolor="none",
-        s=7
+        s=14,
+        label="Secure",
     )
-    ax.scatter(
+    ax_scatter.scatter(
         v2_cat["Z_EST_ALL"][tentative],
         v2_cat["MAG_AUTO"][tentative],
         color="k",
         facecolor="none",
         marker="o",
-        alpha=.7,
-        s=4,
+        alpha=0.7,
+        s=8,
         linewidth=0.5,
+        label="Tentative",
     )
-    ax.set_xlim(z_bins[0], z_bins[-1])
-    y_lims = ax.get_ylim()
+    ax_scatter.set_xlim(z_bins[0], z_bins[-1])
+    y_lims = ax_scatter.get_ylim()
 
-    h_alpha_lims = [
-        [0.543, 0.954],
-        [1.026, 1.545],
-        [1.667, 2.391],
-    ]
-    OIII_lims = [
-        [1.032, 1.574],
-        [1.668, 2.353],
-        [2.513, 3.466],
-    ]
-    OII_lims = [
-        [1.717,2.441],
-        [2.567,3.482],
-        [3.696,4.970],
-    ]
-    for i, l in enumerate(h_alpha_lims):
-        ax.fill_betweenx(y_lims, *l, color="r", alpha=0.15, edgecolor="none", label=r"H$\alpha$" if i==0 else None)
-    for i, l in enumerate(OIII_lims):
-        ax.fill_betweenx(y_lims, *l, color="g", alpha=0.15, edgecolor="none", label=r"[O\,\textsc{iii}]" if i==0 else None)
-    for i, l in enumerate(OII_lims):
-        ax.fill_betweenx(y_lims, *l, color="b", alpha=0.15, edgecolor="none", label=r"[O\,\textsc{ii}]" if i==0 else None)
+    # for i, l in enumerate(h_alpha_lims):
+    #     ax.fill_betweenx(y_lims, *l, color="r", alpha=0.15, edgecolor="none", label=r"H$\alpha$" if i==0 else None)
+    # for i, l in enumerate(OIII_lims):
+    #     ax.fill_betweenx(y_lims, *l, color="g", alpha=0.15, edgecolor="none", label=r"[O\,\textsc{iii}]" if i==0 else None)
+    # for i, l in enumerate(OII_lims):
+    #     ax.fill_betweenx(y_lims, *l, color="b", alpha=0.15, edgecolor="none", label=r"[O\,\textsc{ii}]" if i==0 else None)
 
-    ax.set_ylim(y_lims)
-
+    # ax.set_ylim(y_lims)
 
     # # cat_names = ["grizli_photz_matched.fits"]
 
@@ -119,11 +113,43 @@ if __name__ == "__main__":
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 4], ax=ax, label="First Pass")
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 5], ax=ax, label="Placeholder")
 
-    ax.set_ylabel(r"$m_{\rm{F200W}}$")
-    ax.set_xlabel(r"$z$")
-    ax.legend()
+    ax_scatter.set_ylabel(r"$m_{\rm{F200W}}$")
+    ax_scatter.set_xlabel(r"$z$")
+    ax_scatter.legend()
+
+    ax_z_hist = fig.add_subplot(gs[0, 0], sharex=ax_scatter)
+    plt.setp(ax_z_hist.get_xticklabels(), visible=False)
+
+    ax_z_hist.hist(
+        v2_cat["Z_EST_ALL"][secure],
+        # v2_cat["MAG_AUTO"][secure],
+        color="purple",
+        # alpha=.7,
+        # edgecolor="none",
+        # s=7,
+        bins=z_bins,
+    )
+    ax_z_hist.set_ylabel(r"Number of Sources")
+
+    ax_mag_hist = fig.add_subplot(gs[1, 1], sharey=ax_scatter)
+    plt.setp(ax_mag_hist.get_yticklabels(), visible=False)
+
+    ax_mag_hist.hist(
+        [v2_cat["MAG_AUTO"][secure], v2_cat["MAG_AUTO"][tentative]],
+        # color="purple",
+        # alpha=.7,
+        # edgecolor="none",
+        # s=7,
+        bins=np.arange(15, 30, 0.5),
+        orientation="horizontal",
+        stacked=True,
+    )
+    ax_mag_hist.set_xlabel(r"Number of Sources")
+
+    fig.patch.set_alpha(0.0)
 
     plt.savefig(save_dir / "mag_z_scatter.pdf")
+    plt.savefig(save_dir / "svg" / "mag_z_scatter.svg")
     # for k, v in line_dict.items():
     #     for k_n, v_n in niriss_info.items():
     #         # low = v_n[0]/v -1

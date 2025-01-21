@@ -1,3 +1,7 @@
+"""
+Show the distribution of galaxies on sky.
+"""
+
 import plot_utils
 from default_imports import *
 
@@ -9,10 +13,39 @@ def sky_plot(
     idx_arr: ArrayLike,
     ra_col: str = "RA",
     dec_col: str = "DEC",
-    ax=None,
-    s=2,
+    ax: plt.Axes | None = None,
+    s: int = 5,
     **kwargs,
 ):
+    """
+    Plot points on sky, using world coordinates.
+
+    Parameters
+    ----------
+    cat : Table
+        The catalogue from which to draw points.
+    idx_arr : ArrayLike
+        A boolean array selecting points from the catalogue.
+    ra_col : str, optional
+        The name of the column containing the right ascension, by default
+        ``"RA"``.
+    dec_col : str, optional
+        The name of the column containing the declination, by default
+        ``"DEC"``.
+    ax : plt.Axes | None, optional
+        The axes on which the galaxies will be plotted, by default
+        ``None``.
+    s : int, optional
+        The size of the markers, by default 5.
+    **kwargs : dict, optional
+        Any additional keywords to pass through to `~plt.Axes.scatter`.
+
+    Returns
+    -------
+    (`~plt.Figure`, `~plt.Axes`, `~matplotlib.collections.PathCollection`)
+        The figure, axes, and plotted points.
+    """
+
     if ax is None:
         fig, ax = plt.subplots(figsize=(aanda_columnwidth, aanda_columnwidth / 1.62))
     else:
@@ -74,7 +107,8 @@ if __name__ == "__main__":
             img_hdul[0].data,
             norm=astrovis.ImageNormalize(
                 img_hdul[0].data,
-                interval=astrovis.PercentileInterval(99.9),
+                # interval=astrovis.PercentileInterval(99.9),
+                interval=astrovis.ManualInterval(-0.001, 10),
                 stretch=astrovis.LogStretch(),
             ),
             cmap="binary",
@@ -93,12 +127,32 @@ if __name__ == "__main__":
     # sky_plot(v1_cat, (v1_cat["V1_CLASS"] == 4), ax=ax, label="First Pass")
     # sky_plot(v1_cat, v1_cat["V1_CLASS"] >= 5, ax=ax, label="Placeholder")
 
-    sky_plot(
-        v2_cat,
-        (v2_cat["Z_FLAG_ALL"] >= 9) & (~np.isfinite(v2_cat["zspec"])),
-        ax=ax,
-        label="Secure",
-    )
+    # sky_plot(
+    #     v2_cat,
+    #     (v2_cat["Z_FLAG_ALL"] >= 9) & (~np.isfinite(v2_cat["zspec"])),
+    #     ax=ax,
+    #     label="Secure",
+    # )
+
+    for i, (label, z_range, icon, size) in enumerate(
+        zip(
+            ["1.1", "1.34", "1.9"],
+            [[1.09, 1.11], [1.32, 1.37], [1.85, 1.9]],
+            ["x", "*", "o"],
+            [15, 30, 15],
+        )
+    ):
+        sky_plot(
+            v2_cat,
+            (v2_cat["Z_FLAG_ALL"] >= 9)
+            # & (~np.isfinite(v2_cat["zspec"]))
+            & (v2_cat["Z_EST_ALL"] >= z_range[0]) & (v2_cat["Z_EST_ALL"] < z_range[-1]),
+            ax=ax,
+            label=label,
+            s=size,
+            marker=icon,
+            edgecolor="none",
+        )
 
     ax.set_xlabel(r"R.A.")
     ax.set_ylabel(r"Dec.")
@@ -106,9 +160,19 @@ if __name__ == "__main__":
 
     # plt.savefig(save_dir / "sample_sky_plot.pdf", dpi=600)
 
+    fig.patch.set_alpha(0.0)
+
+    plt.savefig(save_dir / "sample_sky_plot.pdf", dpi=600)
+    plt.savefig(save_dir / "svg" / "sample_sky_plot.svg", dpi=600)
+
     # plt.show()
 
+    z_range = [1.32, 1.37]
+    # z_range = [1.85,1.9]
+
     for r in v2_cat["ID", "RA", "DEC"][
-        (v2_cat["Z_FLAG_ALL"] >= 9) & (~np.isfinite(v2_cat["zspec"]))
+        (v2_cat["Z_FLAG_ALL"] >= 9)  # & (~np.isfinite(v2_cat["zspec"])
+        & (v2_cat["Z_EST_ALL"] >= z_range[0])
+        & (v2_cat["Z_EST_ALL"] < z_range[-1])
     ]:
         print(r[0], r[1], r[2])

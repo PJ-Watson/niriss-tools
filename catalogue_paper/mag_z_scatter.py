@@ -1,5 +1,5 @@
 """
-Show the distribution of NIRISS redshifts.
+Show galaxies in the magnitude-redshift plane.
 """
 
 import plot_utils
@@ -48,51 +48,71 @@ if __name__ == "__main__":
 
     z_bins = np.arange(0, 4, 0.05)
 
-    ax.hist(
+    ax.scatter(
         v2_cat["Z_EST_ALL"][secure],
-        # v2_cat["MAG_AUTO"][secure],
-        color="purple",
-        # alpha=.7,
-        # edgecolor="none",
-        # s=7,
-        bins=z_bins,
+        v2_cat["MAG_AUTO"][secure],
+        color="k",
+        alpha=0.7,
+        edgecolor="none",
+        s=7,
     )
-    # ax.scatter(
-    #     v2_cat["Z_EST_ALL"][tentative],
-    #     v2_cat["MAG_AUTO"][tentative],
-    #     color="k",
-    #     facecolor="none",
-    #     marker="o",
-    #     alpha=.7,
-    #     s=4,
-    #     linewidth=0.5,
-    # )
+    ax.scatter(
+        v2_cat["Z_EST_ALL"][tentative],
+        v2_cat["MAG_AUTO"][tentative],
+        color="k",
+        facecolor="none",
+        marker="o",
+        alpha=0.7,
+        s=4,
+        linewidth=0.5,
+    )
     ax.set_xlim(z_bins[0], z_bins[-1])
-    # y_lims = ax.get_ylim()
+    y_lims = ax.get_ylim()
 
-    # h_alpha_lims = [
-    #     [0.543, 0.954],
-    #     [1.026, 1.545],
-    #     [1.667, 2.391],
-    # ]
-    # OIII_lims = [
-    #     [1.032, 1.574],
-    #     [1.668, 2.353],
-    #     [2.513, 3.466],
-    # ]
-    # OII_lims = [
-    #     [1.717,2.441],
-    #     [2.567,3.482],
-    #     [3.696,4.970],
-    # ]
-    # for i, l in enumerate(h_alpha_lims):
-    #     ax.fill_betweenx(y_lims, *l, color="r", alpha=0.15, edgecolor="none", label=r"H$\alpha$" if i==0 else None)
-    # for i, l in enumerate(OIII_lims):
-    #     ax.fill_betweenx(y_lims, *l, color="g", alpha=0.15, edgecolor="none", label=r"[O\,\textsc{iii}]" if i==0 else None)
-    # for i, l in enumerate(OII_lims):
-    #     ax.fill_betweenx(y_lims, *l, color="b", alpha=0.15, edgecolor="none", label=r"[O\,\textsc{ii}]" if i==0 else None)
+    h_alpha_lims = [
+        [0.543, 0.954],
+        [1.026, 1.545],
+        [1.667, 2.391],
+    ]
+    OIII_lims = [
+        [1.032, 1.574],
+        [1.668, 2.353],
+        [2.513, 3.466],
+    ]
+    OII_lims = [
+        [1.717, 2.441],
+        [2.567, 3.482],
+        [3.696, 4.970],
+    ]
+    for i, l in enumerate(h_alpha_lims):
+        ax.fill_betweenx(
+            y_lims,
+            *l,
+            color="r",
+            alpha=0.15,
+            edgecolor="none",
+            label=r"H$\alpha$" if i == 0 else None,
+        )
+    for i, l in enumerate(OIII_lims):
+        ax.fill_betweenx(
+            y_lims,
+            *l,
+            color="g",
+            alpha=0.15,
+            edgecolor="none",
+            label=r"[O\,\textsc{iii}]" if i == 0 else None,
+        )
+    for i, l in enumerate(OII_lims):
+        ax.fill_betweenx(
+            y_lims,
+            *l,
+            color="b",
+            alpha=0.15,
+            edgecolor="none",
+            label=r"[O\,\textsc{ii}]" if i == 0 else None,
+        )
 
-    # ax.set_ylim(y_lims)
+    ax.set_ylim(y_lims)
 
     # # cat_names = ["grizli_photz_matched.fits"]
 
@@ -123,12 +143,11 @@ if __name__ == "__main__":
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 4], ax=ax, label="First Pass")
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 5], ax=ax, label="Placeholder")
 
-    # ax.set_ylabel(r"$m_{\rm{F200W}}$")
+    ax.set_ylabel(r"$m_{\rm{F200W}}$")
     ax.set_xlabel(r"$z$")
-    ax.set_ylabel(r"Number of Objects")
-    # ax.legend()
+    ax.legend()
 
-    plt.savefig(save_dir / "z_hist.pdf")
+    plt.savefig(save_dir / "mag_z_scatter.pdf")
     # for k, v in line_dict.items():
     #     for k_n, v_n in niriss_info.items():
     #         # low = v_n[0]/v -1

@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
     ax.hist(
         # v2_cat["zspec"][secure],
-        v2_cat["zspec"][secure] - v2_cat["Z_EST_ALL"][secure],
+        v2_cat["zphot"][secure] - v2_cat["Z_EST_ALL"][secure],
         # v2_cat["MAG_AUTO"][secure],
         color="purple",
         # alpha=.7,

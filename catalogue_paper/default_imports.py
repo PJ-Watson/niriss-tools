@@ -1,3 +1,7 @@
+"""
+Setup default imports and directories.
+"""
+
 import os
 from functools import partial
 from pathlib import Path

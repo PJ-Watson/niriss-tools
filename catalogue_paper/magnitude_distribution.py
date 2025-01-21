@@ -1,3 +1,7 @@
+"""
+Distribution of magnitudes at various stages of the reduction.
+"""
+
 import plot_utils
 from default_imports import *
 
