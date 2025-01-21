@@ -2,24 +2,33 @@
 A module to handle alignment and reprojection of ancillary images.
 """
 
-import os
 from copy import deepcopy
+from os import PathLike
 from pathlib import Path
 
 import astropy.units as u
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
+from astropy.wcs import utils as wcs_utils
 from numpy.typing import ArrayLike
 from reproject import reproject_adaptive, reproject_exact, reproject_interp
 from reproject.mosaicking import find_optimal_celestial_wcs
 from scipy import ndimage
 
+__all__ = [
+    "gen_new_wcs",
+    "pc_to_cd",
+    "pad_wcs",
+    "calc_full_var",
+    "reproject_image",
+]
+
 
 def gen_new_wcs(
-    ref_path: os.PathLike,
+    ref_path: PathLike,
     ref_hdu_index: int = 0,
-    resolution: float | u.Quantity = 0.08,
+    resolution: float | u.Quantity = 0.04,
     padding: int | tuple[int, int] = 100,
 ) -> tuple[WCS, tuple[int, int]]:
     """
@@ -31,15 +40,15 @@ def gen_new_wcs(
 
     Parameters
     ----------
-    ref_path : os.PathLike
+    ref_path : PathLike
         The path of the reference image, to which all other images will be
         cropped.
     ref_hdu_index : int, optional
         The index of the HDU containing the reference image, by default 0.
     resolution : float | `~astropy.units.Quantity`, optional
         The pixel scale used in the new WCS. If a float is supplied, the
-        units are assumed to be arcseconds. By default 0.08.
-    padding : int | (int, int), optional
+        units are assumed to be arcseconds. By default 0.04.
+    padding : int | tuple[int, int], optional
         The padding to apply around the reference image in pixels, by
         default 100. If a tuple is supplied, the values are applied in the
         order (axis2, axis1).
@@ -88,7 +97,7 @@ def pc_to_cd(
 
     `astropy.wcs.WCS` recognises CD keywords as input but converts them
     and works internally with the PC matrix.
-    `~astropy.wcs.WCS.to_header()` returns the PC matrix even if the input
+    `~astropy.wcs.WCS.to_header` returns the PC matrix even if the input
     was a CD matrix. This can cause problems if used to update an existing
     header with a CD matrix, so we convert between the two.
 
@@ -133,7 +142,7 @@ def pad_wcs(
     """
     Add padding to all relevant WCS keywords.
 
-    Adapted from `grizli.model.ImageData.add_padding_to_wcs()`, with
+    Adapted from `grizli.model.ImageData.add_padding_to_wcs`, with
     minor modifications to avoid slicing attributes of
     `~astropy.wcs.Wcsprm`, and allowing for symmetrical padding.
 
@@ -200,15 +209,15 @@ def pad_wcs(
 
 
 def calc_full_var(
-    sci_path: os.PathLike,
-    wht_path: os.PathLike,
-    exp_path: os.PathLike,
+    sci_path: PathLike,
+    wht_path: PathLike,
+    exp_path: PathLike,
     sci_hdu_index: int = 0,
     wht_hdu_index: int = 0,
     exp_hdu_index: int = 0,
     compress: bool = True,
     overwrite: bool = False,
-) -> os.PathLike:
+) -> PathLike:
     """
     Calculate the full variance array from "sci", "wht", and "exp" images.
 
@@ -218,12 +227,12 @@ def calc_full_var(
 
     Parameters
     ----------
-    sci_path : `~os.PathLike`
+    sci_path : PathLike
         The path of the science image, containing the measured fluxes.
-    wht_path : `~os.PathLike`
+    wht_path : PathLike
         The path of the weight image, containing the inverse variance from
         the sky and read noise.
-    exp_path : `~os.PathLike`
+    exp_path : PathLike
         The path of the exposure image, containing the exposure time map.
     sci_hdu_index : int, optional
         The index of the HDU containing the science image, by default 0.
@@ -240,9 +249,13 @@ def calc_full_var(
 
     Returns
     -------
-    `~os.PathLike`
+    PathLike
         The path of the new variance array.
     """
+
+    sci_path = Path(sci_path)
+    exp_path = Path(exp_path)
+    wht_path = Path(wht_path)
 
     output_path = deepcopy(exp_path)
     if output_path.suffix == ".gz":
@@ -270,18 +283,28 @@ def calc_full_var(
                 if sample == 1:
                     full_exp = exp_hdul[exp_hdu_index].data
                 else:
-                    # Grow the exposure map to the original frame
-                    full_exp = np.zeros(sci_hdul[sci_hdu_index].data.shape, dtype=int)
-                    full_exp[int(sample / 2) :: sample, int(sample / 2) :: sample] += (
-                        exp_hdul[exp_hdu_index].data * 1
+                    full_exp = np.memmap(
+                        output_path.parent / "temp_exp.dat",
+                        dtype=float,
+                        mode="w+",
+                        shape=(sci_hdul[sci_hdu_index].data.shape),
                     )
-                    full_exp = ndimage.maximum_filter(full_exp, sample)
+                    # Grow the exposure map to the original frame
+                    # full_exp = np.zeros(sci_hdul[sci_hdu_index].data.shape, dtype=int)
+                    full_exp[int(sample / 2) :: sample, int(sample / 2) :: sample] += (
+                        exp_hdul[exp_hdu_index].data * 1.0
+                    )
+                    full_exp = ndimage.maximum_filter(full_exp, sample, output=full_exp)
+
+                del exp_hdul[exp_hdu_index].data
+
+                print("Grown full exp map")
 
                 # Multiplicative factors that have been applied since the original count-rate images
                 phot_scale = 1.0
 
                 for k in ["PHOTMJSR", "PHOTSCAL"]:
-                    print(f"{k} {exp_hdr[k]:.3f}")
+                    # print(f"{k} {exp_hdr[k]:.3f}")
                     phot_scale /= exp_hdr.get(k, 1)
 
                 # Unit and pixel area scale factors
@@ -289,21 +312,38 @@ def calc_full_var(
                     phot_scale *= exp_hdr.get("PHOTFNU", 1) / exp_hdr.get("OPHOTFNU", 1)
 
                 # "effective_gain" = electrons per DN of the mosaic
-                effective_gain = phot_scale * full_exp
+                # effective_gain = phot_scale * full_exp
+                full_exp *= phot_scale
+                print("Calculated effective gain")
 
                 # Poisson variance in mosaic DN
-                var_poisson_dn = (
-                    np.maximum(sci_hdul[sci_hdu_index].data, 0) / effective_gain
-                )
+                # var_poisson_dn = (
+                #     np.maximum(sci_hdul[sci_hdu_index].data, 0) / effective_gain
+                # )
+                full_exp /= np.maximum(sci_hdul[sci_hdu_index].data, 0)
+                full_exp = full_exp ** (-1)
+                del sci_hdul[sci_hdu_index].data
+
+                print("About to open wht")
 
                 with fits.open(wht_path) as wht_hdul:
                     # Original variance from the `wht` image = RNOISE + BACKGROUND
-                    var_wht = 1 / wht_hdul[wht_hdu_index].data
+                    # var_wht = 1 / wht_hdul[wht_hdu_index].data
+                    full_exp += 1 / wht_hdul[wht_hdu_index].data
+
+                    del wht_hdul[wht_hdu_index].data
+
+                    new_hdr = sci_hdul[0].header.copy()
+                    # new_hdr[]
 
                     # New total variance
-                    var_total = var_wht + var_poisson_dn
+                    # var_total = var_wht + var_poisson_dn
 
-                    var_hdul = fits.HDUList([fits.PrimaryHDU(data=var_total)])
+                    print("Making HDUList")
+                    var_hdul = fits.HDUList(
+                        [fits.PrimaryHDU(data=full_exp, header=new_hdr)]
+                    )
+                    print("Writing output")
 
                     var_hdul.writeto(output_path, overwrite=True)
 
@@ -311,8 +351,8 @@ def calc_full_var(
 
 
 def reproject_image(
-    input_path: os.PathLike,
-    output_dir: os.PathLike,
+    input_path: PathLike,
+    output_path: PathLike,
     output_wcs: WCS,
     output_shape: tuple[int, int],
     input_hdu_index: int = 0,
@@ -321,22 +361,25 @@ def reproject_image(
     compress: bool = True,
     overwrite: bool = False,
     prefix: str = "repr_",
+    preliminary_buffer: int | None = 250,
     **reproject_kwargs,
-) -> os.PathLike:
+) -> PathLike:
     """
     Reproject an image to a new WCS.
 
     A wrapper around `reproject`, for file handling and default
-    parameters. If `~reproject.reproject_adaptive()` is used as the
-    method, the flux is conserved by default (`conserve_flux=True`). For
+    parameters. If `~reproject.reproject_adaptive` is used as the
+    method, the flux is conserved by default (``conserve_flux=True``). For
     other methods, the input is assumed to be in surface brightness units.
 
     Parameters
     ----------
-    input_path : `~os.PathLike`
+    input_path : PathLike
         The path of the original image.
-    output_dir : `~os.PathLike`
-        The path of the output directory.
+    output_path : PathLike
+        The path of the output file. If a directory is passed, the output
+        filename will be the same as the input, with the addition of
+        ``prefix``.
     output_wcs : `~astropy.wcs.WCS`
         The new WCS onto which the image will be reprojected.
     output_shape : tuple[int,int]
@@ -344,43 +387,51 @@ def reproject_image(
     input_hdu_index : int, optional
         The index of the HDU containing the input image, by default 0.
     method : {"interp", "adaptive", "exact"}
-        The reprojection method to use, by default "adaptive".
+        The reprojection method to use, by default ``"adaptive"``.
     conserve_flux : bool, optional
         If True (default), the input flux will be conserved. This will
-        only work if `method="adaptive"`.
+        only work if ``method="adaptive"``.
     compress : bool, optional
         If True (default), the output file will be compressed and saved
         with the extension ".fits.gz".
     overwrite : bool, optional
         Overwrite the file if it exists already, by default False.
     prefix : str, optional
-        The string to prepend to the output filename, by default "repr_".
+        The string to prepend to the output filename, by default
+        ``"repr_"``. Only used if ``output_path`` is a directory.
+    preliminary_buffer : int | None, optional
+        For very large images, perform a rough initial crop, padded by
+        ``preliminary_buffer``, before the full reprojection. By default,
+        this is set to 250 pixels.
     **reproject_kwargs : dict, optional
         Additional keyword arguments to pass to the reproject function.
 
     Returns
     -------
-    `~os.PathLike`
+    PathLike
         The path of the reprojected image.
 
     Raises
     ------
     ValueError
-        An error will be raised if the `method` argument is not valid.
+        An error will be raised if the ``method`` argument is not valid.
 
     Notes
     -----
-    To reproject a segmentation map, call this function with `method=True`
-    and `order="nearest-neighbour"`.
+    To reproject a segmentation map, call this function with
+    ``method=interp`` and ``order="nearest-neighbour"``.
     """
 
-    output_path = deepcopy(Path(input_path))
-    if output_path.suffix == ".gz":
-        output_path = output_path.with_suffix("")
+    if output_path.is_dir():
+        _path = deepcopy(Path(input_path))
+        if _path.suffix == ".gz":
+            _path = _path.with_suffix("")
 
-    output_path = (
-        Path(output_dir) / f"{prefix}{output_path.name}{".gz" if compress else ""}"
-    )
+        output_path = (
+            Path(output_path) / f"{prefix}{_path.name}{".gz" if compress else ""}"
+        )
+    # else:
+    #     output_path = output_path.parent / output_path.name.with_name
 
     if output_path.is_file() and (not overwrite):
         print(
@@ -416,6 +467,8 @@ def reproject_image(
 
         with fits.open(input_path) as orig_hdul:
 
+            print("Opened")
+
             out_hdul = fits.HDUList()
             out_hdr = deepcopy(orig_hdul[input_hdu_index].header)
 
@@ -427,9 +480,60 @@ def reproject_image(
                 hdr_partial = pc_to_cd(hdr_partial)
 
             out_hdr.update(hdr_partial)
+            print("Updated header")
+
+            # print ()
+            if preliminary_buffer is not None:
+                print("Using buffer")
+                corners = np.array(
+                    [
+                        [-preliminary_buffer, -preliminary_buffer],
+                        [-preliminary_buffer, output_shape[1] + preliminary_buffer],
+                        [
+                            preliminary_buffer + output_shape[0],
+                            output_shape[1] + preliminary_buffer,
+                        ],
+                        [preliminary_buffer + output_shape[0], -preliminary_buffer],
+                    ]
+                )
+
+                orig_wcs = WCS(orig_hdul[input_hdu_index].header.copy())
+                # # orig_data = orig_hdul[input_hdu_index].data
+                # print (dir(orig_wcs))
+                # print (orig_wcs.array_shape)
+                # # print (getattr(orig_wcs, "naxis1",getattr(orig_wcs, "_naxis1")))
+                # print (orig_hdul[input_hdu_index].data.shape)
+
+                proj_corners = wcs_utils.pixel_to_pixel(
+                    output_wcs, orig_wcs, *corners.T
+                )
+                crop_slice = (
+                    slice(
+                        int(np.nanmax([np.nanmin(proj_corners[1]), 0])),
+                        int(
+                            np.nanmin(
+                                [np.nanmax(proj_corners[1]), orig_wcs.array_shape[1]]
+                            )
+                        ),
+                    ),
+                    slice(
+                        int(np.nanmax([np.nanmin(proj_corners[0]), 0])),
+                        int(
+                            np.nanmin(
+                                [np.nanmax(proj_corners[0]), orig_wcs.array_shape[0]]
+                            )
+                        ),
+                    ),
+                )
+            print("About to reproject")
 
             repr_output = reproject_fn(
-                orig_hdul[input_hdu_index],
+                # orig_hdul[input_hdu_index],
+                (
+                    (orig_hdul[input_hdu_index].data[crop_slice], orig_wcs[crop_slice])
+                    if preliminary_buffer is not None
+                    else orig_hdul[input_hdu_index]
+                ),
                 output_wcs,
                 shape_out=output_shape,
                 **reproject_kwargs,

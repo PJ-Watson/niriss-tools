@@ -19,9 +19,6 @@ from libc.math cimport pow
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def calc_chisq(
-    # np.ndarray[DTYPE_t, ndim=2, mode='c'] models,
-    # np.ndarray[DTYPE_t, ndim=1, mode='c'] obs,
-    # np.ndarray[DTYPE_t, ndim=1, mode='c'] inv_sig_sq,
     DTYPE_t[:,::1] models,
     DTYPE_t[::1] obs,
     DTYPE_t[::1] inv_sig_sq,
