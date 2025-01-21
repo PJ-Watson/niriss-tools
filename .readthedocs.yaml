@@ -36,4 +36,6 @@ python:
       path: .
       extra_requirements:
       - docs
+      - grism
+      - isophotal
     # - requirements: docs/requirements.txt

@@ -51,7 +51,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # html_theme = 'furo'
 # html_theme = 'sphinx_rtd'
 html_theme = "pydata_sphinx_theme"
-html_static_path = ["_static"]
+html_static_path = []
 
 # Don't show typehints in description or signature
 autodoc_typehints = "none"

@@ -39,12 +39,13 @@ docs = [
     "sphinx-astropy>=1.9.1",
     "pydata-sphinx-theme>=0.16.1"
 ]
-grizli = [
-    "grizli[jwst]"
+grism = [
+    "grizli[jwst]",
+    "bagpipes",
 ]
 isophotal = [
     "bottleneck>=1.4",
-    "photutils>=1.13",
+    "photutils>=2.0.0",
     "reproject>=0.14",
     "shapely>=2.0.4"
 ]
