@@ -12,7 +12,7 @@ description = "A complete pipeline for processing JWST-NIRISS data."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Programming Language :: Python :: 3",
@@ -36,7 +36,8 @@ docs = [
     "sphinx-copybutton>=0.5",
     "sphinx>=8.0",
     "numpydoc>=1.8",
-    "sphinx-astropy>=1.9.1"
+    "sphinx-astropy>=1.9.1",
+    "pydata-sphinx-theme>=0.16.1"
 ]
 grizli = [
     "grizli[jwst]"
