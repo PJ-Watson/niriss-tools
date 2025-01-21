@@ -90,13 +90,18 @@ def generate_fit_params(
     min_age_bin: float = 30,
 ) -> dict:
     """
-    Generate a default set of fit parameters for ``bagpipes``.
+    Generate a dictionary of fit parameters for Bagpipes.
+
+    This uses the Leja+19 continuity SFH.
 
     Parameters
     ----------
     obj_z : float | ArrayLike
-        The redshift of the object to fit. If ``ArrayLike``, this
-        indicates the maximum range of redshifts to fit to.
+        The redshift of the object to fit. If a scalar value is passed,
+        and ``z_range==0.0``, the object will be fit to a single redshift
+        value. If ``z_range!=0.0``, this will be the centre of the
+        redshift window. If an array is passed, this explicity sets the
+        redshift range to use for fitting.
     z_range : float, optional
         The maximum redshift range to search over, by default 0.01. To fit
         to a single redshift, pass a single value for ``obj_z``, and set
@@ -107,7 +112,8 @@ def generate_fit_params(
         star formation rate following Leja+19. By default ``5`` bins are
         generated.
     min_age_bin : float, optional
-        The minimum age of any bin in Myr, by default 30.
+        The minimum age to use for the continuity SFH in Myr, i.e. the
+        first bin will range from ``(0,min_age_bin)``. By default 30.
 
     Returns
     -------

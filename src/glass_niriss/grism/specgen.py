@@ -147,6 +147,7 @@ def H(a: float, x: ArrayLike) -> ArrayLike:
     ArrayLike
         The numerical approximation to the Voigt-Hjerting profile.
     """
+
     P = x**2
     H0 = np.exp(-(x**2))
     Q = 1.5 * x ** (-2)

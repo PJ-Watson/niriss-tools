@@ -732,6 +732,7 @@ class AtlasFitter:
             fit_info_str = file.attrs["fit_instructions"]
             fit_info_str = fit_info_str.replace("array", "np.array")
             fit_info_str = fit_info_str.replace("float", "np.float")
+            print(fit_info_str)
             if eval(fit_info_str) != self.fit_instructions:
                 print(eval(fit_info_str), self.fit_instructions)
                 raise ValueError("Fit instructions do not match.")
