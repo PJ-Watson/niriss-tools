@@ -262,11 +262,13 @@ def constrained_adaptive(
     print(f"Total bins: {len(_all_unq)} (Hex: {num_hex_bins}, Voronoi: {num_vor_bins})")
 
     if plot:
-        fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+        fig, axs = plt.subplots(2, 2, sharex=True, sharey=True, constrained_layout=True)
 
         img_norm = astrovis.ImageNormalize(
             data=signal,
-            interval=astrovis.PercentileInterval(99.9),
+            interval=astrovis.ManualInterval(
+                vmin=0.0, vmax=np.nanpercentile(signal, q=99.9)
+            ),
             stretch=astrovis.LogStretch(),
         )
         axs[0, 0].imshow(signal, norm=img_norm, origin="lower", cmap="plasma")

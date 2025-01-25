@@ -35,7 +35,7 @@ if __name__ == "__main__":
         / "compiled"
     )
 
-    new_cat_name = "internal_full_1.fits"
+    new_cat_name = "internal_full_3.fits"
     v2_cat = Table.read(v2_out_dir / new_cat_name)
 
     # fig, ax = plt.subplots(
@@ -50,15 +50,17 @@ if __name__ == "__main__":
     secure = v2_cat["Z_FLAG_ALL"] >= 9
     tentative = (v2_cat["Z_FLAG_ALL"] == 7) | (v2_cat["Z_FLAG_ALL"] == 6)
 
-    z_bins = np.arange(0, 4, 0.025)
+    z_bins = np.arange(0, 4, 0.05)
 
     ax_scatter.scatter(
         v2_cat["Z_EST_ALL"][secure],
         v2_cat["MAG_AUTO"][secure],
-        color="k",
+        # color="k",
         alpha=0.7,
-        edgecolor="none",
-        s=14,
+        # edgecolor="none",
+        color="dodgerblue",
+        edgecolor="blue",
+        s=8,
         label="Secure",
     )
     ax_scatter.scatter(
@@ -112,6 +114,7 @@ if __name__ == "__main__":
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] > 0], ax=ax, label="Extracted")
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 4], ax=ax, label="First Pass")
     # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 5], ax=ax, label="Placeholder")
+    print(v2_cat.colnames)
 
     ax_scatter.set_ylabel(r"$m_{\rm{F200W}}$")
     ax_scatter.set_xlabel(r"$z$")
@@ -120,30 +123,81 @@ if __name__ == "__main__":
     ax_z_hist = fig.add_subplot(gs[0, 0], sharex=ax_scatter)
     plt.setp(ax_z_hist.get_xticklabels(), visible=False)
 
-    ax_z_hist.hist(
-        v2_cat["Z_EST_ALL"][secure],
-        # v2_cat["MAG_AUTO"][secure],
-        color="purple",
-        # alpha=.7,
-        # edgecolor="none",
-        # s=7,
+    print(len(v2_cat["Z_EST_ALL"][secure & (v2_cat["Z_EST_ALL"] >= 2)]))
+
+    z_secure = np.array(v2_cat["Z_EST_ALL"][secure])
+    z_tentative = np.array(v2_cat["Z_EST_ALL"][tentative])
+
+    _, _, barlist = ax_z_hist.hist(
+        z_secure,
         bins=z_bins,
+        histtype="stepfilled",
+        color="dodgerblue",
+        ec="blue",
+        linewidth=1,
+        zorder=2,
     )
+    ax_z_hist.hist(
+        np.concatenate([z_secure, z_tentative]),
+        bins=z_bins,
+        histtype="step",
+        ec="k",
+        # ls="--",
+        linewidth=1,
+        zorder=1,
+    )
+
+    # ax_z_hist.hist(
+    #     [v2_cat["Z_EST_ALL"][secure],v2_cat["Z_EST_ALL"][tentative]],
+    #     # v2_cat["MAG_AUTO"][secure],
+    #     # color="purple",
+    #     # alpha=.7,
+    #     # edgecolor="none",
+    #     # s=7,
+    #     bins=z_bins,
+    #     stacked=True
+    # )
     ax_z_hist.set_ylabel(r"Number of Sources")
 
     ax_mag_hist = fig.add_subplot(gs[1, 1], sharey=ax_scatter)
     plt.setp(ax_mag_hist.get_yticklabels(), visible=False)
 
-    ax_mag_hist.hist(
-        [v2_cat["MAG_AUTO"][secure], v2_cat["MAG_AUTO"][tentative]],
-        # color="purple",
-        # alpha=.7,
-        # edgecolor="none",
-        # s=7,
-        bins=np.arange(15, 30, 0.5),
+    mag_secure = np.array(v2_cat["MAG_AUTO"][secure])
+    mag_tentative = np.array(v2_cat["MAG_AUTO"][tentative])
+    print(len(mag_secure), len(mag_tentative))
+
+    mag_bins = np.arange(15, 30, 0.5)
+    _, _, barlist = ax_mag_hist.hist(
+        mag_secure,
+        bins=mag_bins,
+        histtype="stepfilled",
+        color="dodgerblue",
+        ec="blue",
+        linewidth=1,
+        zorder=2,
         orientation="horizontal",
-        stacked=True,
     )
+    ax_mag_hist.hist(
+        np.concatenate([mag_secure, mag_tentative]),
+        bins=mag_bins,
+        histtype="step",
+        ec="k",
+        # ls="--",
+        linewidth=1,
+        zorder=1,
+        orientation="horizontal",
+    )
+
+    # ax_mag_hist.hist(
+    #     [v2_cat["MAG_AUTO"][secure], v2_cat["MAG_AUTO"][tentative]],
+    #     # color="purple",
+    #     # alpha=.7,
+    #     # edgecolor="none",
+    #     # s=7,
+    #     bins=np.arange(15, 30, 0.5),
+    #     orientation="horizontal",
+    #     stacked=True,
+    # )
     ax_mag_hist.set_xlabel(r"Number of Sources")
 
     fig.patch.set_alpha(0.0)

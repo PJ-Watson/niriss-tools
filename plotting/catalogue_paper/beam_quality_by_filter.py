@@ -1,3 +1,7 @@
+"""
+Show the beam quality as a function of orientation and grism filter.
+"""
+
 import plot_utils
 from default_imports import *
 
@@ -35,6 +39,6 @@ if __name__ == "__main__":
     ax.set_ylabel(r"Number of Objects")
     ax.legend()
 
-    plt.savefig(save_dir / "magnitude_hist.pdf")
+    # plt.savefig(save_dir / "magnitude_hist.pdf")
 
     plt.show()

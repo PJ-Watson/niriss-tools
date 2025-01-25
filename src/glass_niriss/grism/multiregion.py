@@ -408,19 +408,24 @@ class BagpipesSampler(object):
         # Find the dimensionality of the fit
         self.ndim = len(self.params)
 
-    def _update_model_components(
+    def update_model_components(
         self,
         param: ArrayLike,
     ) -> dict:
         """
-        Generates a model object with the current parameters.
+        Generate a model object with the current parameters.
 
         Originally from `bagpipes.fitting.fitted_model`, modified to allow
         for running in parallel (no attributes overwritten).
 
+        Parameters
+        ----------
+        param : ArrayLike
+            The array of parameters to be updated.
+
         Returns
         -------
-        new_components : dict
+        dict
             The updated components for a model galaxy.
         """
 
@@ -475,9 +480,41 @@ class BagpipesSampler(object):
 
         return new_components
 
-    def _sample(self, param_vector, cont_only=False, rm_line=None, **model_kwargs):
+    def sample(
+        self,
+        param_vector: ArrayLike,
+        cont_only: bool = False,
+        rm_line: list[str] | str | None = None,
+        **model_kwargs,
+    ) -> ArrayLike:
+        """
+        Regenerate a model spectrum from a sampled parameter vector.
 
-        new_comps = self._update_model_components(param_vector)
+        Parameters
+        ----------
+        param_vector : ArrayLike
+            The array of parameters to be updated.
+        cont_only : bool, optional
+            If ``True``, the model spectrum will be generated without any
+            nebular emission. By default ``False``.
+        rm_line : list[str] | None, optional
+            The names of one or more lines to exclude from the model
+            spectrum, based on the `Cloudy <https://www.nublado.org/>`__
+            naming convention (see `here
+            <https://bagpipes.readthedocs.io/en/latest/model_galaxies.html#getting-observables-line-fluxes>`__
+            for more details). By default ``None``.
+        **model_kwargs : dict, optional
+            Any additional keyword arguments to pass to
+            `~glass_niriss.grism.specgen.ExtendedModelGalaxy`.
+
+        Returns
+        -------
+        ArrayLike
+            A 2D array, containing the wavelengths and corresponding
+            fluxes of the modelled galaxy spectrum.
+        """
+
+        new_comps = self.update_model_components(param_vector)
         # if "cont_only" not in model_kwargs:
         # model_kwargs["cont_only"] = model_kwargs.get("cont_only", False)
         # model_kwargs["rm_line"] = model_kwargs.get("rm_line", "H  1  6562.81A")
@@ -601,7 +638,7 @@ class RegionsMultiBeam(MultiBeam):
 
         for sample_i, row in enumerate(rows):
 
-            temp_resamp_1d = pipes_sampler._sample(
+            temp_resamp_1d = pipes_sampler.sample(
                 samples2d[row],
                 spec_wavs=spec_wavs,
                 cont_only=cont_only,
@@ -663,7 +700,7 @@ class RegionsMultiBeam(MultiBeam):
 
         for sample_i, row in enumerate(rows):
 
-            temp_resamp_1d = pipes_sampler._sample(
+            temp_resamp_1d = pipes_sampler.sample(
                 samples2d[row],
                 spec_wavs=spec_wavs,
                 cont_only=cont_only,

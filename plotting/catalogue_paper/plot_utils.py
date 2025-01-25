@@ -5,9 +5,72 @@ import matplotlib as mpl
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy.table import Table
+from numpy.typing import ArrayLike
 
 aanda_columnwidth = 256.0748 / 72.27
 aanda_textwidth = 523.5307 / 72.27
+
+
+def sky_plot(
+    cat: Table,
+    idx_arr: ArrayLike | None = None,
+    ra_col: str = "RA",
+    dec_col: str = "DEC",
+    ax: plt.Axes | None = None,
+    s: int = 5,
+    **kwargs,
+):
+    """
+    Plot points on sky, using world coordinates.
+
+    Parameters
+    ----------
+    cat : Table
+        The catalogue from which to draw points.
+    idx_arr : ArrayLike
+        A boolean array selecting points from the catalogue.
+    ra_col : str, optional
+        The name of the column containing the right ascension, by default
+        ``"ra"``.
+    dec_col : str, optional
+        The name of the column containing the declination, by default
+        ``"dec"``.
+    ax : plt.Axes | None, optional
+        The axes on which the galaxies will be plotted, by default
+        ``None``.
+    s : int, optional
+        The size of the markers, by default 5.
+    **kwargs : dict, optional
+        Any additional keywords to pass through to `~plt.Axes.scatter`.
+
+    Returns
+    -------
+    (`~plt.Figure`, `~plt.Axes`, `~matplotlib.collections.PathCollection`)
+        The figure, axes, and plotted points.
+    """
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(aanda_columnwidth, aanda_columnwidth / 1.62))
+    else:
+        fig = ax.get_figure()
+
+    if idx_arr is not None:
+        plot_cat = cat[idx_arr]
+    else:
+        plot_cat = cat
+
+    print(len(plot_cat[ra_col]))
+    print(np.nansum(np.isfinite(plot_cat[ra_col])))
+
+    sc = ax.scatter(
+        plot_cat[ra_col],
+        plot_cat[dec_col],
+        s=s,
+        transform=ax.get_transform("world"),
+        **kwargs,
+    )
+    return fig, ax, sc
 
 
 def setup_aanda_style():
@@ -158,12 +221,35 @@ def format_cursor_data(data):
 
 
 def plot_hist(
-    data,
-    ax=None,
-    alpha=1.0,
-    bins=20,
+    data: ArrayLike,
+    ax: plt.Axes | None = None,
+    alpha: float = 1.0,
+    bins: int = 20,
     **kwargs,
 ):
+    """
+    Generate a histogram with some useful defaults.
+
+    Parameters
+    ----------
+    data : ArrayLike
+        The data to be plotted.
+    ax : plt.Axes | None, optional
+        The axes on which the histogram will be plotted, by default
+        ``None``.
+    alpha : float, optional
+        The transparency of the histogram, by default 1.0.
+    bins : int, optional
+        The number of bins to divide the data into, by default 20.
+    **kwargs : dict, optional
+        Any additional keyword arguments to pass through to `
+        `~plt.axes.hist``.
+
+    Returns
+    -------
+    (`~plt.Figure`, `~plt.Axes`, `~matplotlib.collections.PathCollection`)
+        The figure, axes, and plotted histogram.
+    """
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(aanda_columnwidth, aanda_columnwidth / 1.62))

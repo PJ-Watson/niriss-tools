@@ -11,13 +11,27 @@ import spectres
 from bagpipes import config, utils
 from bagpipes.input.spectral_indices import measure_index
 from bagpipes.models import model_galaxy as BagpipesModelGalaxy
+from bagpipes.models.model_galaxy import H, addAbs
 from numpy.typing import ArrayLike
 
 # from bagpipes.models.nebular_model import nebular
 
-__all__ = ["ExtendedModelGalaxy", "CLOUDY_LINE_MAP", "check_coverage"]
+__all__ = [
+    "ExtendedModelGalaxy",
+    "CLOUDY_LINE_MAP",
+    "check_coverage",
+    "NIRISS_FILTER_LIMITS",
+]
 
 CLOUDY_LINE_MAP = [
+    # Paschen series
+    {
+        "cloudy": [
+            "H  1  1.87510m",
+        ],
+        "grizli": "PaA",
+        "wave": 18756.3,
+    },
     {
         "cloudy": [
             "H  1  1.28180m",
@@ -27,11 +41,72 @@ CLOUDY_LINE_MAP = [
     },
     {
         "cloudy": [
-            "TOTL  1.08303m",
+            "H  1  1.09380m",
         ],
-        "grizli": "HeI-1083",
-        "wave": 10830.3,
+        "grizli": "PaG",
+        "wave": 10941.2,
     },
+    {
+        "cloudy": [
+            "H  1  1.00493m",
+        ],
+        "grizli": "PaD",
+        "wave": 10052.2,
+    },
+    # Balmer Series
+    {
+        "cloudy": [
+            "H  1  6562.81A",
+            "N  2  6583.45A",
+            "N  2  6548.05A",
+        ],
+        "grizli": "Ha",
+        "wave": 6564.697,
+    },
+    {
+        "cloudy": ["H  1  4861.33A"],
+        "grizli": "Hb",
+        "wave": 4862.738,
+    },
+    {
+        "cloudy": ["H  1  4340.46A"],
+        "grizli": "Hg",
+        "wave": 4341.731,
+    },
+    {
+        "cloudy": ["H  1  4101.73A"],
+        "grizli": "Hd",
+        "wave": 4102.936,
+    },
+    # Oxygen
+    {
+        "cloudy": [
+            "O  3  5006.84A",
+        ],
+        "grizli": "OIII-5007",
+        "wave": 5008.240,
+    },
+    {
+        "cloudy": [
+            "O  3  4958.91A",
+        ],
+        "grizli": "OIII-4959",
+        "wave": 4960.295,
+    },
+    {
+        "cloudy": ["Blnd  4363.00A"],
+        "grizli": "OIII-4363",
+        "wave": 4364.436,
+    },
+    {
+        "cloudy": [
+            "Blnd  3726.00A",
+            "Blnd  3729.00A",
+        ],
+        "grizli": "OII",
+        "wave": 3728.48,
+    },
+    # Sulphur
     {
         "cloudy": [
             "S  3  9530.62A",
@@ -56,37 +131,32 @@ CLOUDY_LINE_MAP = [
     },
     {
         "cloudy": [
-            "H  1  6562.81A",
-            "N  2  6583.45A",
-            "N  2  6548.05A",
+            "S  3  6312.06A",
         ],
-        "grizli": "Ha",
-        "wave": 6564.697,
+        "grizli": "SIII-6314",
+        "wave": 6313.81,
+    },
+    # Helium
+    {
+        "cloudy": [
+            "TOTL  1.08303m",
+        ],
+        "grizli": "HeI-1083",
+        "wave": 10830.3,
     },
     {
         "cloudy": [
-            "O  3  5006.84A",
+            "He 1  5875.64A",
         ],
-        "grizli": "OIII-5007",
-        "wave": 5008.240,
-    },
-    {
-        "cloudy": ["H  1  4861.33A"],
-        "grizli": "Hb",
-        "wave": 4862.738,
-    },
-    {
-        "cloudy": ["Blnd  4363.00A"],
-        "grizli": "OIII-4363",
-        "wave": 4364.436,
+        "grizli": "HeI-5877",
+        "wave": 5877.249,
     },
     {
         "cloudy": [
-            "Blnd  3726.00A",
-            "Blnd  3729.00A",
+            "He 1  3888.63A",
         ],
-        "grizli": "OII",
-        "wave": 3728.48,
+        "grizli": "HeI-1083",
+        "wave": 3889.75,
     },
 ]
 
@@ -125,73 +195,6 @@ def check_coverage(obs_wavelength: float, filter_limits: dict = NIRISS_FILTER_LI
             return True
 
     return False
-
-
-# T
-def H(a: float, x: ArrayLike) -> ArrayLike:
-    """
-    The Voigt-Hjerting profile.
-
-    Based on the numerical approximation by `Garcia+06
-    <https://ui.adsabs.harvard.edu/abs/2006MNRAS.369.2025T/>`__.
-
-    Parameters
-    ----------
-    a : float
-        The damping parameter.
-    x : ArrayLike
-        The array of values over which the profile should be evaluated.
-
-    Returns
-    -------
-    ArrayLike
-        The numerical approximation to the Voigt-Hjerting profile.
-    """
-
-    P = x**2
-    H0 = np.exp(-(x**2))
-    Q = 1.5 * x ** (-2)
-    return H0 - a / np.sqrt(np.pi) / P * (
-        H0**2 * (4.0 * P**2 + 7.0 * P + 4.0 + Q) - Q - 1.0
-    )
-
-
-def addAbs(wl_mod: list, t: float, zabs: float) -> float:
-    """
-    A function that calculates the absorption from foreground source.
-
-    Parameters
-    ----------
-    wl_mod : list
-        The wavelength values, in units of :math:`\\mathring{A}`.
-    t : float
-        The hydrogen column density in units of :math:`\\text{cm}^{-2}`.
-    zabs : float
-        The redshift of the absorption source.
-
-    Returns
-    -------
-    float
-        The absorption fraction, :math:`e^{-\\tau}`.
-    """
-
-    # Constants
-    m_e = 9.1095e-28
-    e = 4.8032e-10
-    c = 2.998e10
-    lamb = 1215.67
-    f = 0.416
-    gamma = 6.265e8
-    broad = 1
-
-    C_a = np.sqrt(np.pi) * e**2 * f * lamb * 1e-8 / m_e / c / broad
-    a = lamb * 1.0e-8 * gamma / (4.0 * np.pi * broad)
-    dl_D = broad / c * lamb
-    x = (wl_mod / (zabs + 1.0) - lamb) / dl_D + 0.01
-
-    # Optical depth
-    tau = np.array([C_a * t * H(a, x)], dtype=np.float64)
-    return np.exp(-tau)[0]
 
 
 class ExtendedModelGalaxy(BagpipesModelGalaxy):
@@ -295,7 +298,7 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         self,
         model_comp: dict,
         cont_only: bool = True,
-        rm_line: list[str] | None = None,
+        rm_line: list[str] | str | None = None,
     ):
         """
         Calculate a full model spectrum given a set of model components.
