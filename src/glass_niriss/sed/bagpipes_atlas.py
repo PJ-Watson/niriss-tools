@@ -28,7 +28,7 @@ from tqdm import tqdm
 
 from glass_niriss.c_utils import calc_chisq
 
-__all__ = ["AtlasGenerator", "AtlasFitter"]
+__all__ = ["AtlasGenerator", "AtlasFitter", "temp_chdir"]
 
 
 default_min_errs = {

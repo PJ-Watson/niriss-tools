@@ -482,7 +482,8 @@ def regen_catalogue(
             WEIGHT_TYPE = "VARIANCE"
 
     drz_im = fits.open(drz_file)
-    data = drz_im[0].data.byteswap().newbyteorder()
+    # data = drz_im[0].data.byteswap().newbyteorder()
+    data = drz_im[0].data.view(drz_im[0].data.dtype.newbyteorder())
 
     logstr = f"make_SEP_catalog: {drz_file} weight={weight_file} ({WEIGHT_TYPE})"
     utils.log_comment(utils.LOGFILE, logstr, verbose=verbose, show_date=True)
@@ -519,7 +520,8 @@ def regen_catalogue(
     need_err = (not use_bkg_err) | (not get_background)
     if (weight_file is not None) & need_err:
         wht_im = fits.open(weight_file)
-        wht_data = wht_im[0].data.byteswap().newbyteorder()
+        # wht_data = wht_im[0].data.byteswap().newbyteorder()
+        wht_data = wht_im[0].data.view(wht_im[0].data.dtype.newbyteorder())
 
         if WEIGHT_TYPE == "VARIANCE":
             err_data = np.sqrt(wht_data)
@@ -659,6 +661,8 @@ def regen_catalogue(
             objects["number"] = np.arange(len(objects), dtype=np.int32) + 1
             print(len(objects))
         else:
+
+            print("Using old segmentation map")
 
             seg_img = SegmentationImage(new_seg_map)
 

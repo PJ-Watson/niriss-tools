@@ -9,18 +9,6 @@ plot_utils.setup_aanda_style()
 
 if __name__ == "__main__":
 
-    v2_out_dir = (
-        root_dir
-        / "2024_08_16_A2744_v4"
-        / "grizli_home"
-        / "classification-stage-2"
-        / "catalogues"
-        / "compiled"
-    )
-
-    new_cat_name = "internal_full_3.fits"
-    v2_cat = Table.read(v2_out_dir / new_cat_name)
-
     fig, axs = plt.subplots(
         1,
         2,
@@ -33,27 +21,72 @@ if __name__ == "__main__":
     )
     fig.get_layout_engine().set(w_pad=0 / 72, h_pad=0 / 72, hspace=0, wspace=0)
 
-    secure = v2_cat["Z_FLAG_ALL"] >= 9
-    tentative = (v2_cat["Z_FLAG_ALL"] == 7) | (v2_cat["Z_FLAG_ALL"] == 6)
+    # secure = full_cat["Z_FLAG_ALL"] >= 9
+    # tentative = (full_cat["Z_FLAG_ALL"] == 7) | (full_cat["Z_FLAG_ALL"] == 6)
 
-    spec = np.isfinite(v2_cat["zspec"])
-    phot = (np.isfinite(v2_cat["zphot"])) & (~spec)
+    secure = full_cat["Z_FLAG"] >= 4
+    tentative = full_cat["Z_FLAG"] == 3
+
+    spec = np.zeros(len(full_cat), dtype=bool)
+    # spec[np.isfinite(full_cat["zspec"])] = True
+    spec[np.isfinite(full_cat["zmed_prev"])] = True
+    phot = np.zeros(len(full_cat), dtype=bool)
+    # phot[np.isfinite(full_cat["zphot"]) & ~spec] = True
+    phot[
+        np.isfinite(full_cat["zphot_astrodeep"])
+        & (~spec)
+        & (full_cat["flag_astrodeep"] != 100028)
+    ] = True
+    # print (np.nansum(phot))
+    no_z = np.zeros(len(full_cat), dtype=bool)
+    no_z[~phot & ~spec] = True
+    # phot = (np.isfinite(full_cat["zphot"])) & (~(np.isfinite(full_cat["zspec"]) & full_cat["zspec"].mask))
+    print(np.sum(spec), np.sum(phot))
+
+    # print (full_cat["flag_astrodeep"][5:10])
+
+    print(
+        np.sum(secure),
+        np.sum(secure & spec),
+        np.sum(secure & phot),
+        np.sum(secure & no_z),
+    )
+    print(
+        np.sum(tentative),
+        np.sum(tentative & spec),
+        np.sum(tentative & phot),
+        np.sum(tentative & no_z),
+    )
+    print(
+        np.sum(secure | tentative),
+        np.sum((secure | tentative) & spec),
+        np.sum((secure | tentative) & phot),
+        np.sum((secure | tentative) & no_z),
+    )
+
+    print()
+
+    # exit()
 
     # z_range = np.linspace(
-    #     0, np.nanmax([v2_cat["zphot"][secure], v2_cat["Z_EST_ALL"][secure]]) * 1.05, 2
+    #     0, np.nanmax([full_cat["zphot"][secure], full_cat["Z_EST_ALL"][secure]]) * 1.05, 2
     # )
-    z_range = np.linspace(0, 8, 2)
+    z_range = np.linspace(0, 8.5, 2)
     print(z_range)
     for a in axs.flatten():
         a.plot(z_range, z_range, c="k", linestyle=":", linewidth=1, zorder=-1)
 
     for i, (z_name, z_cat_name, idx) in enumerate(
-        zip([r"$z_{\rm{spec}}$", r"$z_{\rm{phot}}$"], ["zspec", "zphot"], [spec, phot])
+        zip(
+            [r"$z_{\rm{spec}}$", r"$z_{\rm{phot}}$"],
+            ["zmed_prev", "zphot_astrodeep"],
+            [spec, phot],
+        )
     ):
         axs[i].scatter(
-            v2_cat["Z_EST_ALL"][secure & idx],
-            v2_cat[z_cat_name][secure & idx],
-            # v2_cat["MAG_AUTO"][secure],
+            full_cat["Z_NIRISS"][secure & idx],
+            full_cat[z_cat_name][secure & idx],
+            # full_cat["MAG_AUTO"][secure],
             color="purple",
             alpha=0.7,
             # edgecolor="none",
@@ -62,7 +95,7 @@ if __name__ == "__main__":
             label=z_name,
         )
         scatter = np.nanstd(
-            (v2_cat["Z_EST_ALL"][secure & idx] - v2_cat[z_cat_name][secure & idx])
+            (full_cat["Z_NIRISS"][secure & idx] - full_cat[z_cat_name][secure & idx])
         )
         axs[i].text(
             0.1,
@@ -73,25 +106,26 @@ if __name__ == "__main__":
         )
 
         print(
-            v2_cat["NUMBER"][
-                (secure & idx) & ((v2_cat["Z_EST_ALL"] - v2_cat[z_cat_name]) > 0.25)
+            full_cat["NUMBER", "Z_NIRISS"][
+                (secure & idx)
+                & (np.abs(full_cat["Z_NIRISS"] - full_cat[z_cat_name]) > 0.25)
             ]
         )
 
     # ax.hist(
-    #     # v2_cat["zspec"][secure],
-    #     v2_cat["zphot"][secure] - v2_cat["Z_EST_ALL"][secure],
-    #     # v2_cat["MAG_AUTO"][secure],
+    #     # full_cat["zspec"][secure],
+    #     full_cat["zphot"][secure] - full_cat["Z_EST_ALL"][secure],
+    #     # full_cat["MAG_AUTO"][secure],
     #     color="purple",
     #     # alpha=.7,
     #     # edgecolor="none",
     #     # s=7,
     #     bins=np.arange(-0.025, 0.025, 0.001),
     # )
-    # print (v2_cat["ID"][(v2_cat["zspec"]>=7) & secure])
+    # print (full_cat["ID"][(full_cat["zspec"]>=7) & secure])
     # ax.scatter(
-    #     v2_cat["Z_EST_ALL"][tentative],
-    #     v2_cat["MAG_AUTO"][tentative],
+    #     full_cat["Z_EST_ALL"][tentative],
+    #     full_cat["MAG_AUTO"][tentative],
     #     color="k",
     #     facecolor="none",
     #     marker="o",
@@ -193,12 +227,12 @@ if __name__ == "__main__":
     # # ax.set_ylabel(r"Number of Objects")
     # # ax.legend()
 
-    axs[1].set_xlim([0.08, 8.0])
-    axs[1].set_ylim([0.08, 8.0])
+    axs[1].set_xlim([0.08, 10])
+    axs[1].set_ylim([0.08, 10])
     #
     # plt.subplots_adjust(wspace=0, hspace=0)
 
-    plt.savefig(save_dir / "z_niriss_vs_z_spec_phot.pdf")
+    # plt.savefig(save_dir / "z_niriss_vs_z_spec_phot.pdf")
     # for k, v in line_dict.items():
     #     for k_n, v_n in niriss_info.items():
     #         # low = v_n[0]/v -1

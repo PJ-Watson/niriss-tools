@@ -21,6 +21,7 @@ __all__ = [
     "CLOUDY_LINE_MAP",
     "check_coverage",
     "NIRISS_FILTER_LIMITS",
+    "BagpipesSampler",
 ]
 
 CLOUDY_LINE_MAP = [
@@ -547,3 +548,217 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
             1 + 1e-6 * (287.6155 + 1.62887 / wlum**2 + 0.01360 / wlum**4)
         ) * wavelength[wavelength >= 2e4]
         return wavelength
+
+
+class BagpipesSampler(object):
+    """
+    Bagpipes model galaxy sampler.
+
+    Parameters
+    ----------
+    fit_instructions : dict
+        A dictionary containing information about the model to be
+        generated.
+    veldisp : float, optional
+        The velocity dispersion of the model galaxy in km/s. By default
+        ``veldisp=500``.
+    """
+
+    def __init__(self, fit_instructions: dict, veldisp: float = 500.0):
+
+        self.fit_instructions = deepcopy(fit_instructions)
+        self.model_components = deepcopy(fit_instructions)
+        self.model_components["veldisp"] = veldisp
+
+        # self._set_constants()
+        self._process_fit_instructions()
+        self.model_gal = None
+        # print (fit_instructions)
+
+    def _process_fit_instructions(self) -> None:
+        """
+        Load the fit instructions and populate the class attributes.
+
+        Originally from `bagpipes.fitting.fitted_model`.
+        """
+        all_keys = []  # All keys in fit_instructions and subs
+        all_vals = []  # All vals in fit_instructions and subs
+
+        self.params = []  # Parameters to be fitted
+        self.limits = []  # Limits for fitted parameter values
+        self.pdfs = []  # Probability densities within lims
+        self.hyper_params = []  # Hyperparameters of prior distributions
+        self.mirror_pars = {}  # Params which mirror a fitted param
+
+        # Flatten the input fit_instructions dictionary.
+        for key in list(self.fit_instructions):
+            if not isinstance(self.fit_instructions[key], dict):
+                all_keys.append(key)
+                all_vals.append(self.fit_instructions[key])
+
+            else:
+                for sub_key in list(self.fit_instructions[key]):
+                    all_keys.append(key + ":" + sub_key)
+                    all_vals.append(self.fit_instructions[key][sub_key])
+
+        # Sort the resulting lists alphabetically by parameter name.
+        indices = np.argsort(all_keys)
+        all_vals = [all_vals[i] for i in indices]
+        all_keys.sort()
+
+        # Find parameters to be fitted and extract their priors.
+        for i in range(len(all_vals)):
+            # R_curve cannot be fitted and is either unset or must be a 2D numpy array
+            if not all_keys[i] == "R_curve":
+                if isinstance(all_vals[i], tuple):
+                    self.params.append(all_keys[i])
+                    self.limits.append(all_vals[i])  # Limits on prior.
+
+                    # Prior probability densities between these limits.
+                    prior_key = all_keys[i] + "_prior"
+                    if prior_key in list(all_keys):
+                        self.pdfs.append(all_vals[all_keys.index(prior_key)])
+
+                    else:
+                        self.pdfs.append("uniform")
+
+                    # Any hyper-parameters of these prior distributions.
+                    self.hyper_params.append({})
+                    for i in range(len(all_keys)):
+                        if all_keys[i].startswith(prior_key + "_"):
+                            hyp_key = all_keys[i][len(prior_key) + 1 :]
+                            self.hyper_params[-1][hyp_key] = all_vals[i]
+
+                # Find any parameters which mirror the value of a fit param.
+                if all_vals[i] in all_keys:
+                    self.mirror_pars[all_keys[i]] = all_vals[i]
+
+                if all_vals[i] == "dirichlet":
+                    n = all_vals[all_keys.index(all_keys[i][:-6])]
+                    comp = all_keys[i].split(":")[0]
+                    for j in range(1, n):
+                        self.params.append(comp + ":dirichletr" + str(j))
+                        self.pdfs.append("uniform")
+                        self.limits.append((0.0, 1.0))
+                        self.hyper_params.append({})
+
+        # Find the dimensionality of the fit
+        self.ndim = len(self.params)
+
+    def update_model_components(
+        self,
+        param: ArrayLike,
+    ) -> dict:
+        """
+        Generate a model object with the current parameters.
+
+        Originally from `bagpipes.fitting.fitted_model`, modified to allow
+        for running in parallel (no attributes overwritten).
+
+        Parameters
+        ----------
+        param : ArrayLike
+            The array of parameters to be updated.
+
+        Returns
+        -------
+        dict
+            The updated components for a model galaxy.
+        """
+
+        new_components = deepcopy(self.model_components)
+
+        dirichlet_comps = []
+
+        # Substitute values of fit params from param into model_comp.
+        for i in range(len(self.params)):
+            split = self.params[i].split(":")
+            if len(split) == 1:
+                new_components[self.params[i]] = param[i]
+
+            elif len(split) == 2:
+                if "dirichlet" in split[1]:
+                    if split[0] not in dirichlet_comps:
+                        dirichlet_comps.append(split[0])
+
+                else:
+                    new_components[split[0]][split[1]] = param[i]
+
+        # Set any mirror params to the value of the relevant fit param.
+        for key in list(self.mirror_pars):
+            split_par = key.split(":")
+            split_val = self.mirror_pars[key].split(":")
+            fit_val = new_components[split_val[0]][split_val[1]]
+            new_components[split_par[0]][split_par[1]] = fit_val
+
+        # Deal with any Dirichlet distributed parameters.
+        if len(dirichlet_comps) > 0:
+            comp = dirichlet_comps[0]
+            n_bins = 0
+            for i in range(len(self.params)):
+                split = self.params[i].split(":")
+                if (split[0] == comp) and ("dirichlet" in split[1]):
+                    n_bins += 1
+
+            new_components[comp]["r"] = np.zeros(n_bins)
+
+            j = 0
+            for i in range(len(self.params)):
+                split = self.params[i].split(":")
+                if (split[0] == comp) and "dirichlet" in split[1]:
+                    new_components[comp]["r"][j] = param[i]
+                    j += 1
+
+            tx = dirichlet(new_components[comp]["r"], new_components[comp]["alpha"])
+
+            new_components[comp]["tx"] = tx
+
+        # new_components["veldisp"] = 1100.
+
+        return new_components
+
+    def sample(
+        self,
+        param_vector: ArrayLike,
+        cont_only: bool = False,
+        rm_line: list[str] | str | None = None,
+        **model_kwargs,
+    ) -> ArrayLike:
+        """
+        Regenerate a model spectrum from a sampled parameter vector.
+
+        Parameters
+        ----------
+        param_vector : ArrayLike
+            The array of parameters to be updated.
+        cont_only : bool, optional
+            If ``True``, the model spectrum will be generated without any
+            nebular emission. By default ``False``.
+        rm_line : list[str] | None, optional
+            The names of one or more lines to exclude from the model
+            spectrum, based on the `Cloudy <https://www.nublado.org/>`__
+            naming convention (see `here
+            <https://bagpipes.readthedocs.io/en/latest/model_galaxies.html#getting-observables-line-fluxes>`__
+            for more details). By default ``None``.
+        **model_kwargs : dict, optional
+            Any additional keyword arguments to pass to
+            `~glass_niriss.grism.specgen.ExtendedModelGalaxy`.
+
+        Returns
+        -------
+        ArrayLike
+            A 2D array, containing the wavelengths and corresponding
+            fluxes of the modelled galaxy spectrum.
+        """
+
+        new_comps = self.update_model_components(param_vector)
+        # if "cont_only" not in model_kwargs:
+        # model_kwargs["cont_only"] = model_kwargs.get("cont_only", False)
+        # model_kwargs["rm_line"] = model_kwargs.get("rm_line", "H  1  6562.81A")
+
+        if self.model_gal is None:
+            self.model_gal = ExtendedModelGalaxy(new_comps, **model_kwargs)
+        # else:
+        self.model_gal.update(new_comps, cont_only=cont_only, rm_line=rm_line)
+
+        return self.model_gal.spectrum.T

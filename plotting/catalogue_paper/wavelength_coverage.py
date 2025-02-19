@@ -8,16 +8,16 @@ from default_imports import *
 plot_utils.setup_aanda_style()
 
 line_dict = {
-    "Ly$\alpha$": 1215.24,
+    # "Ly$\alpha$": 1215.24,
     # "MgII": 2799.12,
     "OII": 3728.4835,
     # "OIII": 4960.295,
     "OIII": 5008.24,
     # "OIII" : 4984.2675,
     # "Hbeta": 4862.68,
-    "Halpha": 6564.61,
+    r"$\rm{H}\alpha$": 6564.61,
     "SIII": 9533.2,
-    "PaB": 12821.7,
+    r"$\rm{Pa}\beta$": 12821.7,
 }
 
 niriss_info = {
@@ -45,7 +45,7 @@ if __name__ == "__main__":
     v1_cat = Table.read(catalogue_dir / "compiled_catalogue_v1.fits")
 
     fig = plt.figure(
-        figsize=(plot_utils.aanda_columnwidth, plot_utils.aanda_columnwidth / 1.2),
+        figsize=(plot_utils.aanda_columnwidth, plot_utils.aanda_columnwidth / 1.0),
         constrained_layout=True,
     )
 
@@ -53,9 +53,109 @@ if __name__ == "__main__":
     ax = fig.add_subplot(gs[1, 0])
 
     z_min = 0
-    z_max = 3
+    z_max = 5
     z_range = np.linspace(z_min, z_max, 100)
 
+    fill_kwargs = {
+        "color": "gold",
+    }
+
+    line_set = [
+        [r"$\rm{Pa}\beta$", "SIII", r"$\rm{H}\alpha$"],
+        ["SIII", r"$\rm{H}\alpha$", "OIII"],
+        [r"$\rm{H}\alpha$", "OIII", "OII"],
+    ]
+    for a, b, c in line_set:
+        print(a, b, c)
+
+        high = np.nanmin(
+            [
+                niriss_info["F200W"][-1] / line_dict[a] - 1,
+                niriss_info["F150W"][-1] / line_dict[b] - 1,
+                niriss_info["F115W"][-1] / line_dict[c] - 1,
+            ]
+        )
+        low = np.nanmax(
+            [
+                niriss_info["F200W"][0] / line_dict[a] - 1,
+                niriss_info["F150W"][0] / line_dict[b] - 1,
+                niriss_info["F115W"][0] / line_dict[c] - 1,
+            ]
+        )
+        if [a, b, c] == [r"$\rm{H}\alpha$", "OIII", "OII"]:
+            print("yes")
+            ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
+
+    line_set = [[r"$\rm{H}\alpha$", "OIII"], ["OIII", "OII"]]
+    for a, b in line_set:
+        print(a, b)
+
+        high = np.nanmin(
+            [
+                niriss_info["F200W"][-1] / line_dict[a] - 1,
+                niriss_info["F150W"][-1] / line_dict[b] - 1,
+                # niriss_info["F115W"][-1]/line_dict[c] - 1,
+            ]
+        )
+        low = np.nanmax(
+            [
+                niriss_info["F200W"][0] / line_dict[a] - 1,
+                niriss_info["F150W"][0] / line_dict[b] - 1,
+                # niriss_info["F115W"][0]/line_dict[c] - 1,
+            ]
+        )
+        if [a, b] == ["OIII", "OII"]:
+            #     print ("yes")
+            ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
+
+    line_set = [
+        [r"$\rm{Pa}\beta$", r"$\rm{H}\alpha$"],
+    ]
+    for a, b in line_set:
+        print(a, b)
+
+        high = np.nanmin(
+            [
+                niriss_info["F200W"][-1] / line_dict[a] - 1,
+                niriss_info["F115W"][-1] / line_dict[b] - 1,
+                # niriss_info["F115W"][-1]/line_dict[c] - 1,
+            ]
+        )
+        low = np.nanmax(
+            [
+                niriss_info["F200W"][0] / line_dict[a] - 1,
+                niriss_info["F115W"][0] / line_dict[b] - 1,
+                # niriss_info["F115W"][0]/line_dict[c] - 1,
+            ]
+        )
+        # if [a,b]==["OIII","OII"]:
+        #     print ("yes")
+        ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
+        print(low, high)
+
+    line_set = [[r"$\rm{H}\alpha$", "OIII"], [r"$\rm{Pa}\beta$", r"$\rm{H}\alpha$"]]
+    for a, b in line_set:
+        print(a, b)
+
+        high = np.nanmin(
+            [
+                niriss_info["F150W"][-1] / line_dict[a] - 1,
+                niriss_info["F115W"][-1] / line_dict[b] - 1,
+                # niriss_info["F115W"][-1]/line_dict[c] - 1,
+            ]
+        )
+        low = np.nanmax(
+            [
+                niriss_info["F150W"][0] / line_dict[a] - 1,
+                niriss_info["F115W"][0] / line_dict[b] - 1,
+                # niriss_info["F115W"][0]/line_dict[c] - 1,
+            ]
+        )
+        # if [a,b]==["OIII","OII"]:
+        #     print ("yes")
+        ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
+        print(low, high)
+    # exit()
     # for k, v in line_dict.items():
     #     ax.plot(z_range, (1 + z_range) * v)
 
@@ -63,15 +163,27 @@ if __name__ == "__main__":
     #     ax.fill_between(z_range, v[0], v[1], color="k", alpha=0.4, edgecolor="none")
     for k, v in line_dict.items():
         ax.plot((1 + z_range) * v / 1e4, z_range, c="k", linewidth=0.5)
+        ax.annotate(k, (2.25, 2.3 / v * 1e4 - 1), ha="right", va="bottom")
+        print(2.3 / v * 1e4 - 1)
+    uv_line_dict = {
+        "Ly$\alpha$": 1215.24,
+        "MgII": 2799.12,
+    }
+    for k, v in uv_line_dict.items():
+        ax.plot((1 + z_range) * v / 1e4, z_range, c="k", linewidth=0.5)
+        ax.annotate(k, (1.05, 1.15 / v * 1e4 - 1), ha="left", va="bottom")
+
+    # ax.plot((1 + z_range) *3728.4835 / 1e4, z_range, c="k", linewidth=0.5)
+    ax.annotate("OII", (1.05, 1.15 / 3728.4835 * 1e4 - 1), ha="left", va="bottom")
 
     for k, v in niriss_info.items():
         ax.fill_betweenx(z_range, v[0], v[1], color="k", alpha=0.2, edgecolor="none")
 
     ax.set_xlim(0.95, 2.300)
     ax.set_ylim(z_min, z_max)
-    ax.axhline(1.1, c="k", linestyle=":")
-    ax.axhline(1.35, c="k", linestyle=":")
-    ax.axhline(1.9, c="k", linestyle=":")
+    # ax.axhline(1.1, c="k", linestyle=":")
+    # ax.axhline(1.35, c="k", linestyle=":")
+    # ax.axhline(1.9, c="k", linestyle=":")
     ax.axhline(0.3064, c="k", linestyle=":", label="Cluster")
 
     # hist = partial(plot_utils.plot_hist, bins=np.arange(16.5, 33.5, 0.5), ax=ax)
@@ -100,6 +212,14 @@ if __name__ == "__main__":
         # print (filt_tab)
         filt_tab["PCE"][filt_tab["PCE"] < 1e-3] = np.nan
         ax_filts.plot(filt_tab["Wavelength"], filt_tab["PCE"], c=c)
+
+        ax_filts.annotate(
+            rf"{f}",
+            (np.nanmedian(niriss_info[f]) / 1e4, 0.3),
+            ha="center",
+            va="center",
+            c=c,
+        )
         # half_sens_idx = [
         #     np.nanargmax(filt_tab["PCE"] <= 0.5 * np.nanmax(filt_tab["PCE"])),
         #     np.nanargmax(filt_tab["PCE"] >= 0.5 * np.nanmax(filt_tab["PCE"]))
@@ -114,7 +234,7 @@ if __name__ == "__main__":
             filt_tab["Wavelength"][half_sens_idx[0]],
             filt_tab["Wavelength"][half_sens_idx[-1]],
             color=c,
-            alpha=0.2,
+            alpha=0.1,
             edgecolor="none",
         )
         ax.fill_betweenx(
@@ -122,7 +242,7 @@ if __name__ == "__main__":
             filt_tab["Wavelength"][half_sens_idx[0]],
             filt_tab["Wavelength"][half_sens_idx[-1]],
             color=c,
-            alpha=0.2,
+            alpha=0.1,
             edgecolor="none",
         )
         # print(

@@ -79,20 +79,20 @@ def setup_aanda_style():
     """
     rc_fonts = {
         "font.family": "serif",
-        "font.size": 9,
+        "font.size": 7,
         "figure.figsize": (aanda_columnwidth, 3),
         "text.usetex": True,
         "ytick.right": True,
         "ytick.direction": "in",
         "ytick.minor.visible": True,
-        "ytick.labelsize": 8,
+        "ytick.labelsize": 7,
         "xtick.top": True,
         "xtick.direction": "in",
         "xtick.minor.visible": True,
-        "xtick.labelsize": 8,
-        "axes.labelsize": 9,
-        "axes.titlesize": 9,
-        "legend.fontsize": 9,
+        "xtick.labelsize": 7,
+        "axes.labelsize": 8,
+        "axes.titlesize": 8,
+        "legend.fontsize": 7,
         "text.latex.preamble": (
             r"""
         \usepackage{txfonts}
@@ -259,3 +259,20 @@ def plot_hist(
     hist = ax.hist(data, alpha=alpha, bins=bins, **kwargs)
 
     return fig, ax, hist
+
+
+def table_to_array(table: Table) -> ArrayLike:
+    """
+    Convert an astropy table to a numpy array.
+
+    Parameters
+    ----------
+    table : Table
+        Original astropy table.
+
+    Returns
+    -------
+    ArrayLike
+        Numpy array.
+    """
+    return np.lib.recfunctions.structured_to_unstructured(table.as_array())
