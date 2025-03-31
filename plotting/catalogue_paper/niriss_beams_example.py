@@ -11,27 +11,27 @@ if __name__ == "__main__":
 
     # print (full_cat["NUMBER"][
     #     (full_cat["Z_FLAG_ALL"]>=9)#
-    #     & (full_cat["Z_EST_ALL"]>=1.85)
-    #     & (full_cat["Z_EST_ALL"]<=1.9)
+    #     & (full_cat["Z_NIRISS"]>=1.85)
+    #     & (full_cat["Z_NIRISS"]<=1.9)
     # ])
 
     obj_id = 2938
     # 1983
     # 2938
 
-    obj_z = full_cat[np.where(full_cat["NUMBER"] == obj_id)]["Z_EST_ALL"]
+    obj_z = full_cat[np.where(full_cat["NUMBER"] == obj_id)]["Z_NIRISS"]
     print(obj_z)
 
     pas = ["72.0", "341.0"]
     filts = ["F115W", "F150W", "F200W"]
 
     stack_path = [
-        *(grizli_dir / "Extractions_v2").glob(
+        *(grizli_dir / "Extractions_v4").glob(
             f"**/*glass-a2744_{obj_id:0>5}.stack.fits"
         )
     ][0]
 
-    widths = []
+    widths = [0.15]
 
     with fits.open(stack_path) as stack_hdul:
         # stack_hdul.info()
@@ -49,16 +49,15 @@ if __name__ == "__main__":
                 # print ((h_i["WMAX"]-h_i["WMIN"]) / sh[1])
 
                 print(extent)
-                widths.append(0.15)
+                # widths.append(0.15)
                 widths.append(h_i["WMAX"] - h_i["WMIN"])
-    # print(widths)
+    print(widths)
 
     # exit()
-
     fig, axs = plt.subplots(
         3,
-        6,
-        figsize=(plot_utils.aanda_textwidth, plot_utils.aanda_columnwidth / 1.4),
+        4,
+        figsize=(plot_utils.aanda_textwidth, plot_utils.aanda_columnwidth / 1.1),
         constrained_layout=True,
         # use_gridspec=True,
         sharex="col",
@@ -69,7 +68,7 @@ if __name__ == "__main__":
 
     hatch_colour = "k"
     hatch_kwargs = {
-        "color": "k",
+        "facecolor": "k",
         "edgecolor": hatch_colour,
         "step": "mid",
         "alpha": 0.3,
@@ -80,39 +79,63 @@ if __name__ == "__main__":
 
     # obj_z = None
 
+    fig.delaxes(axs[2, 0])
+    # fig.delaxes(axs[1,0])
+    # fig.delaxes(axs[0,0])
     with fits.open(stack_path) as stack_hdul:
         # stack_hdul.info()
         for i, f in enumerate(filts):
             for j, p in enumerate(pas):
                 if j == 0:
-                    axs[j, (2 * i) + 1].set_title(f)
+                    axs[j, i + 1].set_title(f)
                 if i == 0:
-                    axs[j, (2 * i)].annotate(
+                    axs[j, i].annotate(
                         rf"P.A.\,=\,{p}$^\circ$",
                         (-0.05, 0.5),
                         xycoords="axes fraction",
                         va="center",
                         ha="right",
                         # bbox=dict(boxstyle="round", fc="w"),
-                        # rotation=90
+                        rotation=90,
                     )
+                    kern_i = stack_hdul["KERNEL", f + "," + p].data
+                    vmax_kern = 2 * np.percentile(kern_i.data, 99.5)
+                    norm_kern = astrovis.ImageNormalize(
+                        data=kern_i,
+                        stretch=astrovis.SqrtStretch(),
+                        interval=astrovis.ManualInterval(
+                            vmin=0,
+                            vmax=vmax_kern,
+                        ),
+                    )
+                    axs[j, i].set_yticklabels([])
+
+                    # Kernel
+                    sh_kern = kern_i.data.shape
+                    extent_kern = [0, sh_kern[1], 0, sh_kern[0]]
+
+                    axs[j, i].imshow(
+                        kern_i,
+                        origin="lower",
+                        interpolation="none",
+                        norm=norm_kern,
+                        # vmin=-0.1 * vmax_kern,
+                        # vmax=vmax_kern,
+                        cmap=cm.berlin,
+                        extent=extent_kern,
+                        aspect="equal",
+                    )
+
                 # print (f+","+p)
                 wht_i = stack_hdul["WHT", f + "," + p].data
                 sci_i = stack_hdul["SCI", f + "," + p].data
                 contam_i = stack_hdul["CONTAM", f + "," + p].data
-                kern_i = stack_hdul["KERNEL", f + "," + p].data
                 h_i = stack_hdul["SCI", f + "," + p].header
-                # if obj_z is None:
-                #     obj_z =  stack_hdul["MODEL", f + "," + p].header["REDSHIFT"]
 
                 clip = wht_i > 0 & (contam_i < 0.1 * sci_i)
                 if clip.sum() == 0:
                     clip = np.isfinite(wht_i)
 
-                # avg_rms = 1 / np.median(np.sqrt(wht_i[clip]))
-                # vmax = np.maximum(
-                #     1.5 * np.percentile(sci_i[clip], 98), 5 * avg_rms
-                # )
                 vmax = 0.5
                 norm = astrovis.ImageNormalize(
                     data=sci_i,
@@ -122,38 +145,12 @@ if __name__ == "__main__":
                         vmax=vmax,
                     ),
                 )
-                vmax_kern = 2 * np.percentile(kern_i.data, 99.5)
-                norm_kern = astrovis.ImageNormalize(
-                    data=kern_i,
-                    stretch=astrovis.SqrtStretch(),
-                    interval=astrovis.ManualInterval(
-                        vmin=0,
-                        vmax=vmax_kern,
-                    ),
-                )
-
-                # Kernel
-                sh_kern = kern_i.data.shape
-                extent_kern = [0, sh_kern[1], 0, sh_kern[0]]
-
-                axs[j, (2 * i)].imshow(
-                    kern_i,
-                    origin="lower",
-                    interpolation="none",
-                    norm=norm_kern,
-                    # vmin=-0.1 * vmax_kern,
-                    # vmax=vmax_kern,
-                    cmap=cm.berlin,
-                    extent=extent_kern,
-                    aspect="equal",
-                )
-
                 # Spectrum
                 sh = sci_i.shape
                 extent = [h_i["WMIN"], h_i["WMAX"], 0, sh[0]]
                 print(extent)
 
-                axs[j, (2 * i) + 1].imshow(
+                axs[j, i + 1].imshow(
                     # sci_i,
                     sci_i + contam_i,
                     origin="lower",
@@ -166,13 +163,12 @@ if __name__ == "__main__":
                     aspect="auto",
                 )
                 # axs[j, i].set_xticklabels([])
-                axs[j, (2 * i) + 1].set_yticklabels([])
-                axs[j, (2 * i)].set_yticklabels([])
+                # axs[j, i + 1].set_yticklabels([])
 
-                axs[j, (2 * i) + 1].fill_betweenx(
+                axs[j, i + 1].fill_betweenx(
                     [0, sh[0]], h_i["WMIN"], niriss_filter_sens[f][0], **hatch_kwargs
                 )
-                axs[j, (2 * i) + 1].fill_betweenx(
+                axs[j, i + 1].fill_betweenx(
                     [0, sh[0]], niriss_filter_sens[f][-1], h_i["WMAX"], **hatch_kwargs
                 )
                 # axs[j, i].xaxis.set_tick_params(length=0)
@@ -185,14 +181,14 @@ if __name__ == "__main__":
     ][0]
 
     line_dict = {
-        "Ly$\alpha$": 1215.24,
+        r"Ly$\alpha$": 1215.24,
         # "MgII": 2799.12,
         "OII": 3728.4835,
         "OIII-4958": 4960.295,
-        "OIII-5007": 5008.24,
+        "OIII": 5008.24,
         # "OIII" : 4984.2675,
-        "Hbeta": 4862.68,
-        "Halpha": 6564.61,
+        r"H$\beta$": 4862.68,
+        r"H$\alpha$": 6564.61,
         # "SII": 6731,
         "SIII": 9533.2,
         "PaB": 12821.7,
@@ -203,90 +199,102 @@ if __name__ == "__main__":
         # oned_hdul.info()
         for i, f in enumerate(filts):
             oned_tab = Table(oned_hdul[f].data)
+            # print (oned_tab.colnames)
+            print(len(oned_tab["wave"]))
+            # axs[2, 2*i].remove()
+            axs[2, i + 1].plot(
+                oned_tab["wave"] / 1e4,
+                oned_tab["flux"] / oned_tab["flat"] / 1e-19,
+                drawstyle="steps-mid",
+                c="#d55e00",
+                label="Data" if i == 2 else "_",
+            )
+            axs[2, i + 1].fill_between(
+                oned_tab["wave"] / 1e4,
+                (oned_tab["flux"] + oned_tab["err"]) / oned_tab["flat"] / 1e-19,
+                (oned_tab["flux"] - oned_tab["err"]) / oned_tab["flat"] / 1e-19,
+                # drawstyle="steps-mid",
+                color="#d55e00",
+                step="mid",
+                alpha=0.5,
+            )
+            if np.nanmax(oned_tab["flux"] / oned_tab["flat"] / 1e-19) > max_ylim:
+                max_ylim = np.nanmax(oned_tab["flux"] / oned_tab["flat"] / 1e-19)
+            axs[2, i + 1].plot(
+                oned_tab["wave"] / 1e4,
+                oned_tab["contam"] / oned_tab["flat"] / 1e-19,
+                c="#0072b2",
+                alpha=0.7,
+                drawstyle="steps-mid",
+                zorder=-1,
+                label="Contamination" if i == 2 else "_",
+            )
+            axs[2, i + 1].fill_betweenx(
+                [-1, 100],
+                oned_tab["wave"][0] / 1e4,
+                niriss_filter_sens[f][0],
+                **hatch_kwargs,
+            )
+            axs[2, i + 1].fill_betweenx(
+                [-1, 100],
+                niriss_filter_sens[f][-1],
+                oned_tab["wave"][-1] / 1e4,
+                **hatch_kwargs,
+                label=r"$<50\%$ Sensitivity" if i == 2 else "_",
+            )
+            axs[2, i + 1].set_ylim(ymin=0)
+            from matplotlib.ticker import MultipleLocator
 
+            if i == 0:
+                axs[2, i + 1].yaxis.set_major_locator(MultipleLocator(2.0))
+                axs[2, i + 1].set_yticklabels([])
+                # print ((oned_tab["wave"][0] / 1e4 - 0.1,0))
+                for s in np.arange(0, 12, 2):
+                    an = axs[2, i + 1].annotate(
+                        f"{int(s)}",
+                        (oned_tab["wave"][0] / 1e4 - 0.0125, s - 0.1),
+                        # xycoords
+                        annotation_clip=False,
+                        va="center",
+                        ha="right",
+                    )
+                    an.set_in_layout(False)
+            if i == 2:
+                axs[2, i + 1].legend(fontsize=7, loc=1)
+
+            ylim = axs[2, i + 1].get_ylim()[1]
             for l, v in line_dict.items():
                 # print (v/1e4,  niriss_filter_sens[f][0])
                 line_w = (1 + obj_z) * v / 1e4
                 if (line_w >= niriss_filter_sens[f][0]) and (
                     line_w < niriss_filter_sens[f][-1]
                 ):
-                    axs[2, (2 * i) + 1].axvline(
-                        line_w, c="k", linewidth=1, linestyle=":"
-                    )
-            # print (oned_tab.colnames)
-            print(len(oned_tab["wave"]))
-            # axs[2, 2*i].remove()
-            fig.delaxes(axs[2, 2 * i])
-            axs[2, (2 * i) + 1].plot(
-                oned_tab["wave"] / 1e4,
-                oned_tab["flux"] / oned_tab["flat"] / 1e-19,
-                drawstyle="steps-mid",
-                c="darkorchid",
-                label="Data" if i == 2 else "_",
-            )
-            axs[2, (2 * i) + 1].fill_between(
-                oned_tab["wave"] / 1e4,
-                (oned_tab["flux"] + oned_tab["err"]) / oned_tab["flat"] / 1e-19,
-                (oned_tab["flux"] - oned_tab["err"]) / oned_tab["flat"] / 1e-19,
-                # drawstyle="steps-mid",
-                color="darkorchid",
-                step="mid",
-                alpha=0.5,
-            )
-            if np.nanmax(oned_tab["flux"] / oned_tab["flat"] / 1e-19) > max_ylim:
-                max_ylim = np.nanmax(oned_tab["flux"] / oned_tab["flat"] / 1e-19)
-            axs[2, (2 * i) + 1].plot(
-                oned_tab["wave"] / 1e4,
-                oned_tab["contam"] / oned_tab["flat"] / 1e-19,
-                c="k",
-                alpha=0.5,
-                drawstyle="steps-mid",
-                zorder=-1,
-                label="Contamination" if i == 2 else "_",
-            )
-            axs[2, (2 * i) + 1].fill_betweenx(
-                [-1, 100],
-                oned_tab["wave"][0] / 1e4,
-                niriss_filter_sens[f][0],
-                **hatch_kwargs,
-            )
-            axs[2, (2 * i) + 1].fill_betweenx(
-                [-1, 100],
-                niriss_filter_sens[f][-1],
-                oned_tab["wave"][-1] / 1e4,
-                **hatch_kwargs,
-                label="Sens. Cutoff" if i == 2 else "_",
-            )
-            axs[2, (2 * i) + 1].set_ylim(ymin=0)
-            from matplotlib.ticker import MultipleLocator
-
-            axs[2, (2 * i) + 1].yaxis.set_major_locator(MultipleLocator(2.0))
-            axs[2, (2 * i) + 1].set_yticklabels([])
-            # print ((oned_tab["wave"][0] / 1e4 - 0.1,0))
-            for s in np.arange(0, 12, 2):
-                an = axs[2, (2 * i) + 1].annotate(
-                    f"{int(s)}",
-                    (oned_tab["wave"][0] / 1e4 - 0.025, s - 0.1),
-                    # xycoords
-                    annotation_clip=False,
-                    va="center",
-                    ha="right",
-                )
-                an.set_in_layout(False)
-            if i == 2:
-                axs[2, (2 * i) + 1].legend(fontsize=7, loc=1)
+                    axs[2, i + 1].axvline(line_w, c="k", linewidth=1, linestyle=":")
+                    if l != "OIII-4958":
+                        axs[2, i + 1].annotate(
+                            rf"{l}",
+                            xy=(line_w + 0.005 - (0.005 if l == "OIII" else 0), 1.1),
+                            xycoords=axs[2, i + 1].get_xaxis_transform(),
+                            # xytext=(0.855, ylim + 0.05),
+                            # textcoords="data",
+                            # arrowprops=dict(arrowstyle="-[,widthB=2.5", connectionstyle="arc3"),
+                            ha="center",
+                            va="center",
+                            rotation=60,
+                        )
     for i, f in enumerate(filts):
-        axs[2, (2 * i) + 1].set_ylim(ymax=1.05 * max_ylim)
-        axs[2, (2 * i) + 1].set_xlabel(r"Observed Wavelength ($\mu$m)")
-        # axs[2, (2 * i) + 1].set_ylabel(r"$f_{\lambda} [10^{-19}\,\rm{erg}\,\rm{s}^{-1}\,\rm{cm}^{-2}\,\AA^{-1}]$")
+        axs[2, i + 1].set_ylim(ymax=1.05 * max_ylim)
+        axs[2, i + 1].set_xlabel(r"Observed Wavelength ($\mu$m)")
+        # axs[2, i + 1].set_ylabel(r"$f_{\lambda} [10^{-19}\,\rm{erg}\,\rm{s}^{-1}\,\rm{cm}^{-2}\,\AA^{-1}]$")
 
     # axs[2, (0) + 1].set_ylabel(r"$f_{\lambda} [10^{-19}\,\rm{erg}/\rm{s}/\rm{cm}^{2}/\AA]$")
     an = axs[2, 1].annotate(
         r"$f_{\lambda}\ [10^{-19}\,\rm{erg}/\rm{s}/\rm{cm}^{2}/\AA]$",
-        (-0.15, 0.5),
+        (-0.125, 0.5),
         ha="right",
         va="center",
         xycoords="axes fraction",
+        rotation="vertical",
     )
     an.set_in_layout(False)
 

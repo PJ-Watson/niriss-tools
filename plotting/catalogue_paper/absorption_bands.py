@@ -32,6 +32,7 @@ if __name__ == "__main__":
     # obj_id = 3862
 
     extractions_dir = grizli_dir / "Extractions_v3"
+    # extractions_dir = grizli_dir / "for_others" / "Peter" / "60mas"
 
     model_offset = 0.1
     spec_offset = 0.2
@@ -53,6 +54,12 @@ if __name__ == "__main__":
         for filt in filt_list:
             oned_tab = Table(oned_hdul[filt].data)
             print(oned_tab)
+
+            oned_tab = oned_tab[
+                (oned_tab["wave"] > 1e4 * niriss_filter_sens[filt][0])
+                & (oned_tab["wave"] < 1e4 * niriss_filter_sens[filt][1])
+            ]
+            # print(niriss_filter_sens[filt])
 
             oned_tab["wave"] /= 1e4 * (1 + obj_z)
 

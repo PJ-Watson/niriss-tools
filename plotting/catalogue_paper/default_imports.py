@@ -13,7 +13,7 @@ import numpy as np
 import plot_utils
 from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astropy.io import fits
-from astropy.table import Table
+from astropy.table import QTable, Table
 from astropy.wcs import WCS
 from astropy.wcs import utils as wcs_utils
 from cmcrameri import cm
@@ -42,7 +42,27 @@ full_cat = Table.read(
     / "grizli_home"
     / "Extractions_v4"
     / "catalogues"
-    / "stage_5_output_internal_phot_zprev.fits"
+    / "stage_6"
+    / "stage_6_output_internal_phot_zprev.fits"
+)
+ext_cat = Table.read(
+    root_dir
+    / "2024_08_16_A2744_v4"
+    / "grizli_home"
+    / "Extractions_v4"
+    / "catalogues"
+    / "stage_6"
+    # / "full_external_em_lines.fits"
+    / "full_internal_em_line_data.fits"
+)
+niriss_cat = Table.read(
+    root_dir
+    / "2024_08_16_A2744_v4"
+    / "grizli_home"
+    / "Extractions_v4"
+    / "catalogues"
+    / "stage_6"
+    / "full_external_em_lines.fits"
 )
 
 niriss_filter_sens = {

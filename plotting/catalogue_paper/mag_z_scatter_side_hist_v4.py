@@ -34,6 +34,7 @@ if __name__ == "__main__":
 
     gs = fig.add_gridspec(2, 2, width_ratios=(3, 1), height_ratios=(1, 2))
     ax_scatter = fig.add_subplot(gs[1, 0])
+    ax_scatter.grid(color="k", alpha=0.05, zorder=-1)
 
     secure = full_cat["Z_FLAG"] >= 4
     tentative = full_cat["Z_FLAG"] == 3
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     print(full_cat.colnames)
 
     ax_scatter.set_ylabel(r"$m_{\rm{F200W}}$")
-    ax_scatter.set_xlabel(r"$z$")
+    ax_scatter.set_xlabel(r"$z_{\rm{spec}}$")
     ax_scatter.legend(loc=4)
 
     ax_z_hist = fig.add_subplot(gs[0, 0], sharex=ax_scatter)
@@ -158,6 +159,10 @@ if __name__ == "__main__":
     mag_tentative = np.array(mags[tentative])
     print(len(mag_secure), len(mag_tentative))
 
+    print(full_cat[np.where((mags > 30) & secure)])
+
+    print(mags[full_cat["ID"] == 1990])
+
     mag_bins = np.arange(15, 30, 0.5)
     _, _, barlist = ax_mag_hist.hist(
         [mag_secure, mag_tentative],
@@ -192,6 +197,10 @@ if __name__ == "__main__":
     #     stacked=True,
     # )
     ax_mag_hist.set_xlabel(r"Number of Sources")
+
+    ax_mag_hist.grid(color="k", alpha=0.05, zorder=-1)
+    ax_z_hist.grid(color="k", alpha=0.05, zorder=-1)
+    # ax_z_hist.semilogy()
 
     fig.patch.set_alpha(0.0)
 

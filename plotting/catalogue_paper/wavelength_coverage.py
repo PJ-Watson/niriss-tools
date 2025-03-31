@@ -9,15 +9,15 @@ plot_utils.setup_aanda_style()
 
 line_dict = {
     # "Ly$\alpha$": 1215.24,
-    # "MgII": 2799.12,
-    "OII": 3728.4835,
-    # "OIII": 4960.295,
-    "OIII": 5008.24,
-    # "OIII" : 4984.2675,
+    # r"$\ion{Mg}{ii}$": 2799.12,
+    r"$\left[\ion{O}{ii}\right]$": 3728.4835,
+    # r"$\left[\ion{O}{iii}\right]$": 4960.295,
+    r"$\left[\ion{O}{iii}\right]$": 5008.24,
+    # r"$\left[\ion{O}{iii}\right]$" : 4984.2675,
     # "Hbeta": 4862.68,
-    r"$\rm{H}\alpha$": 6564.61,
-    "SIII": 9533.2,
-    r"$\rm{Pa}\beta$": 12821.7,
+    r"$\ion{H}{\alpha}$": 6564.61,
+    r"$\left[\ion{S}{iii}\right]$": 9533.2,
+    r"$\ion{Pa}{\beta}$": 12821.7,
 }
 
 niriss_info = {
@@ -61,9 +61,17 @@ if __name__ == "__main__":
     }
 
     line_set = [
-        [r"$\rm{Pa}\beta$", "SIII", r"$\rm{H}\alpha$"],
-        ["SIII", r"$\rm{H}\alpha$", "OIII"],
-        [r"$\rm{H}\alpha$", "OIII", "OII"],
+        [r"$\ion{Pa}{\beta}$", r"$\left[\ion{S}{iii}\right]$", r"$\ion{H}{\alpha}$"],
+        [
+            r"$\left[\ion{S}{iii}\right]$",
+            r"$\ion{H}{\alpha}$",
+            r"$\left[\ion{O}{iii}\right]$",
+        ],
+        [
+            r"$\ion{H}{\alpha}$",
+            r"$\left[\ion{O}{iii}\right]$",
+            r"$\left[\ion{O}{ii}\right]$",
+        ],
     ]
     for a, b, c in line_set:
         print(a, b, c)
@@ -82,11 +90,18 @@ if __name__ == "__main__":
                 niriss_info["F115W"][0] / line_dict[c] - 1,
             ]
         )
-        if [a, b, c] == [r"$\rm{H}\alpha$", "OIII", "OII"]:
+        if [a, b, c] == [
+            r"$\ion{H}{\alpha}$",
+            r"$\left[\ion{O}{iii}\right]$",
+            r"$\left[\ion{O}{ii}\right]$",
+        ]:
             print("yes")
             ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
 
-    line_set = [[r"$\rm{H}\alpha$", "OIII"], ["OIII", "OII"]]
+    line_set = [
+        [r"$\ion{H}{\alpha}$", r"$\left[\ion{O}{iii}\right]$"],
+        [r"$\left[\ion{O}{iii}\right]$", r"$\left[\ion{O}{ii}\right]$"],
+    ]
     for a, b in line_set:
         print(a, b)
 
@@ -104,12 +119,12 @@ if __name__ == "__main__":
                 # niriss_info["F115W"][0]/line_dict[c] - 1,
             ]
         )
-        if [a, b] == ["OIII", "OII"]:
+        if [a, b] == [r"$\left[\ion{O}{iii}\right]$", r"$\left[\ion{O}{ii}\right]$"]:
             #     print ("yes")
             ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
 
     line_set = [
-        [r"$\rm{Pa}\beta$", r"$\rm{H}\alpha$"],
+        [r"$\ion{Pa}{\beta}$", r"$\ion{H}{\alpha}$"],
     ]
     for a, b in line_set:
         print(a, b)
@@ -128,12 +143,15 @@ if __name__ == "__main__":
                 # niriss_info["F115W"][0]/line_dict[c] - 1,
             ]
         )
-        # if [a,b]==["OIII","OII"]:
+        # if [a,b]==[r"$\left[\ion{O}{iii}\right]$",r"$\left[\ion{O}{ii}\right]$"]:
         #     print ("yes")
         ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
         print(low, high)
 
-    line_set = [[r"$\rm{H}\alpha$", "OIII"], [r"$\rm{Pa}\beta$", r"$\rm{H}\alpha$"]]
+    line_set = [
+        [r"$\ion{H}{\alpha}$", r"$\left[\ion{O}{iii}\right]$"],
+        [r"$\ion{Pa}{\beta}$", r"$\ion{H}{\alpha}$"],
+    ]
     for a, b in line_set:
         print(a, b)
 
@@ -151,7 +169,7 @@ if __name__ == "__main__":
                 # niriss_info["F115W"][0]/line_dict[c] - 1,
             ]
         )
-        # if [a,b]==["OIII","OII"]:
+        # if [a,b]==[r"$\left[\ion{O}{iii}\right]$",r"$\left[\ion{O}{ii}\right]$"]:
         #     print ("yes")
         ax.fill_between([0.95, 0.98], [low, low], [high, high], **fill_kwargs)
         print(low, high)
@@ -167,14 +185,19 @@ if __name__ == "__main__":
         print(2.3 / v * 1e4 - 1)
     uv_line_dict = {
         "Ly$\alpha$": 1215.24,
-        "MgII": 2799.12,
+        r"$\ion{Mg}{ii}$": 2799.12,
     }
     for k, v in uv_line_dict.items():
         ax.plot((1 + z_range) * v / 1e4, z_range, c="k", linewidth=0.5)
         ax.annotate(k, (1.05, 1.15 / v * 1e4 - 1), ha="left", va="bottom")
 
     # ax.plot((1 + z_range) *3728.4835 / 1e4, z_range, c="k", linewidth=0.5)
-    ax.annotate("OII", (1.05, 1.15 / 3728.4835 * 1e4 - 1), ha="left", va="bottom")
+    ax.annotate(
+        r"$\left[\ion{O}{ii}\right]$",
+        (1.05, 1.15 / 3728.4835 * 1e4 - 1),
+        ha="left",
+        va="bottom",
+    )
 
     for k, v in niriss_info.items():
         ax.fill_betweenx(z_range, v[0], v[1], color="k", alpha=0.2, edgecolor="none")

@@ -14,7 +14,7 @@ if __name__ == "__main__":
         2,
         figsize=(plot_utils.aanda_columnwidth, plot_utils.aanda_columnwidth / 1.8),
         constrained_layout=True,
-        sharex=True,
+        sharex=False,
         sharey=True,
         # hspace=0.,
         # wspace=0.,
@@ -75,6 +75,7 @@ if __name__ == "__main__":
     print(z_range)
     for a in axs.flatten():
         a.plot(z_range, z_range, c="k", linestyle=":", linewidth=1, zorder=-1)
+        a.grid(color="k", alpha=0.05, zorder=-1)
 
     for i, (z_name, z_cat_name, idx) in enumerate(
         zip(
@@ -83,9 +84,10 @@ if __name__ == "__main__":
             [spec, phot],
         )
     ):
+        offset = np.abs(full_cat["Z_NIRISS"] - full_cat[z_cat_name]) > 1
         axs[i].scatter(
-            full_cat["Z_NIRISS"][secure & idx],
-            full_cat[z_cat_name][secure & idx],
+            full_cat[z_cat_name][secure & idx & ~offset],
+            full_cat["Z_NIRISS"][secure & idx & ~offset],
             # full_cat["MAG_AUTO"][secure],
             color="purple",
             alpha=0.7,
@@ -94,8 +96,23 @@ if __name__ == "__main__":
             # bins=z_bins,
             label=z_name,
         )
+        axs[i].scatter(
+            full_cat[z_cat_name][secure & idx & offset],
+            full_cat["Z_NIRISS"][secure & idx & offset],
+            # full_cat["MAG_AUTO"][secure],
+            facecolor="none",
+            alpha=0.7,
+            edgecolor="purple",
+            s=7,
+            # bins=z_bins,
+            label=z_name,
+        )
+        # outliers = full_cat["ID_NIRISS"]
         scatter = np.nanstd(
-            (full_cat["Z_NIRISS"][secure & idx] - full_cat[z_cat_name][secure & idx])
+            (
+                full_cat["Z_NIRISS"][secure & idx & ~offset]
+                - full_cat[z_cat_name][secure & idx & ~offset]
+            )
         )
         axs[i].text(
             0.1,
@@ -106,9 +123,9 @@ if __name__ == "__main__":
         )
 
         print(
-            full_cat["NUMBER", "Z_NIRISS"][
+            full_cat["NUMBER", "Z_NIRISS", z_cat_name, "RA", "DEC", "id_msa_1324"][
                 (secure & idx)
-                & (np.abs(full_cat["Z_NIRISS"] - full_cat[z_cat_name]) > 0.25)
+                & (np.abs(full_cat["Z_NIRISS"] - full_cat[z_cat_name]) > 1)
             ]
         )
 
@@ -192,10 +209,11 @@ if __name__ == "__main__":
     # # ax.set_ylabel(r"$m_{\rm{F200W}}$")
     # axs[1].semilogy()
     # axs[1].semilogx()
+    axs[0].set_xscale("log")
     axs[1].set_xscale("log")
     axs[1].set_yscale("log")
     # axs[1].set_xticks(
-    z_ticks = np.concatenate([np.arange(0.1, 1, 0.1), np.arange(1.0, 9.0, 1)])
+    z_ticks = np.concatenate([np.arange(0.1, 1, 0.1), np.arange(1.0, 10.0, 1)])
     z_ticks_labels = [
         "0.1",
         "0.2",
@@ -214,10 +232,13 @@ if __name__ == "__main__":
         "",
         "",
         "",
+        "10.0",
     ]
     # axs[1].set_xticklabels([])
+    axs[0].set_xticks(z_ticks[:-1], z_ticks_labels[:-1], minor=True)
     axs[1].set_xticks(z_ticks, z_ticks_labels, minor=True)
     axs[1].set_yticks(z_ticks, z_ticks_labels, minor=True)
+    axs[0].set_xticks([0.1, 1.0], ["0.1", "1.0"], minor=False)
     axs[1].set_xticks([0.1, 1.0], ["0.1", "1.0"], minor=False)
     axs[1].set_yticks([0.1, 1.0], ["0.1", "1.0"], minor=False)
     axs[1].set_xlabel(r"$z_{\rm{phot}}$")
@@ -227,12 +248,15 @@ if __name__ == "__main__":
     # # ax.set_ylabel(r"Number of Objects")
     # # ax.legend()
 
-    axs[1].set_xlim([0.08, 10])
-    axs[1].set_ylim([0.08, 10])
+    lims = [0.08, 10]
+
+    axs[0].set_xlim(lims)
+    axs[1].set_xlim(lims)
+    axs[1].set_ylim(lims)
     #
     # plt.subplots_adjust(wspace=0, hspace=0)
 
-    # plt.savefig(save_dir / "z_niriss_vs_z_spec_phot.pdf")
+    plt.savefig(save_dir / "z_niriss_vs_z_spec_phot.pdf")
     # for k, v in line_dict.items():
     #     for k_n, v_n in niriss_info.items():
     #         # low = v_n[0]/v -1

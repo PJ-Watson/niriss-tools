@@ -51,6 +51,7 @@ def sky_plot(
     """
 
     if ax is None:
+        print("Creating figure")
         fig, ax = plt.subplots(figsize=(aanda_columnwidth, aanda_columnwidth / 1.62))
     else:
         fig = ax.get_figure()
@@ -93,9 +94,22 @@ def setup_aanda_style():
         "axes.labelsize": 8,
         "axes.titlesize": 8,
         "legend.fontsize": 7,
+        "lines.linewidth": 1,
         "text.latex.preamble": (
             r"""
+        \usepackage{amsmath}
         \usepackage{txfonts}
+        %
+        \DeclareMathAlphabet{\mathsc}{OT1}{cmr}{m}{sc}
+        \def\testbx{bx}%
+        \DeclareRobustCommand{\ion}[2]{%
+        \relax\ifmmode
+        \ifx\testbx\f@series
+        {\mathbf{#1\,\mathsc{#2}}}\else
+        {\mathrm{#1\,\mathsc{#2}}}\fi
+        \else\textup{#1\,{\mdseries\textsc{#2}}}%
+        \fi}
+        %
         """
         ),
     }
