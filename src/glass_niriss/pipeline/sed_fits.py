@@ -88,6 +88,7 @@ def generate_fit_params(
     z_range: float = 0.01,
     num_age_bins: int = 5,
     min_age_bin: float = 30,
+    continuity: bool = True,
 ) -> dict:
     """
     Generate a dictionary of fit parameters for Bagpipes.
@@ -114,6 +115,9 @@ def generate_fit_params(
     min_age_bin : float, optional
         The minimum age to use for the continuity SFH in Myr, i.e. the
         first bin will range from ``(0,min_age_bin)``. By default 30.
+    continuity : bool, optional
+        Generate a SFH using the continuity prior (Leja+19). True by
+        default, otherwise will use a double power law.
 
     Returns
     -------
@@ -134,29 +138,44 @@ def generate_fit_params(
     cosmo = FlatLambdaCDM(H0=70.0, Om0=0.3)
     age_at_z = cosmo.age(np.nanmax(fit_params["redshift"])).value
 
-    age_bins = np.geomspace(min_age_bin, age_at_z * 1e3, num=num_age_bins)
+    if continuity:
 
-    age_bins = np.insert(age_bins, 0, 0.0)
+        age_bins = np.geomspace(min_age_bin, age_at_z * 1e3, num=num_age_bins)
 
-    continuity = {
-        "massformed": (3.0, 11.0),
-        "metallicity": (0.0, 3.0),
-        "metallicity_prior_mu": 1.0,
-        "metallicity_prior_sigma": 0.5,
-        "bin_edges": age_bins.tolist(),
-    }
+        age_bins = np.insert(age_bins, 0, 0.0)
 
-    for i in range(1, len(continuity["bin_edges"]) - 1):
-        continuity["dsfr" + str(i)] = (-10.0, 10.0)
-        continuity["dsfr" + str(i) + "_prior"] = "student_t"
-        continuity["dsfr" + str(i) + "_prior_scale"] = (
-            0.5  # Defaults to 0.3 (Leja19), we aim for a broader sample
-        )
-        continuity["dsfr" + str(i) + "_prior_df"] = (
-            2  # Defaults to this value as in Leja19, but can be set
-        )
+        continuity = {
+            "massformed": (5.0, 12.0),
+            "metallicity": (0.0, 3.0),
+            "metallicity_prior_mu": 1.0,
+            "metallicity_prior_sigma": 0.5,
+            "bin_edges": age_bins.tolist(),
+        }
 
-    fit_params["continuity"] = continuity
+        for i in range(1, len(continuity["bin_edges"]) - 1):
+            continuity["dsfr" + str(i)] = (-10.0, 10.0)
+            continuity["dsfr" + str(i) + "_prior"] = "student_t"
+            continuity["dsfr" + str(i) + "_prior_scale"] = (
+                0.5  # Defaults to 0.3 (Leja19), we aim for a broader sample
+            )
+            continuity["dsfr" + str(i) + "_prior_df"] = (
+                2  # Defaults to this value as in Leja19, but can be set
+            )
+
+        fit_params["continuity"] = continuity
+
+    else:
+        fit_params["dblplaw"] = {
+            "massformed": (3.0, 11.0),
+            "metallicity": (0.0, 3.0),
+            "metallicity_prior_mu": 1.0,
+            "metallicity_prior_sigma": 0.5,
+            "alpha": (0.1, 1000),
+            "alpha_prior": "log_10",
+            "beta": (0.1, 1000),
+            "beta_prior": "log_10",
+            "tau": (0.1, age_at_z * 1e3),
+        }
 
     fit_params["dust"] = {
         "type": "Cardelli",

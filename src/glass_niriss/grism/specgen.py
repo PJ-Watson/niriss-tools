@@ -8,13 +8,21 @@ from copy import deepcopy
 import bagpipes
 import numpy as np
 import spectres
-from bagpipes import config, utils
+from bagpipes import config, filters, utils
 from bagpipes.input.spectral_indices import measure_index
+from bagpipes.models import chemical_enrichment_history
 from bagpipes.models import model_galaxy as BagpipesModelGalaxy
+from bagpipes.models import star_formation_history as BagpipesSFH
+from bagpipes.models.agn_model import agn
+from bagpipes.models.dust_attenuation_model import dust_attenuation
+from bagpipes.models.dust_emission_model import dust_emission
+from bagpipes.models.igm_model import igm
 from bagpipes.models.model_galaxy import H, addAbs
-from numpy.typing import ArrayLike
 
-# from bagpipes.models.nebular_model import nebular
+# from bagpipes.models.agn_model import agn
+from bagpipes.models.nebular_model import nebular
+from bagpipes.models.stellar_model import stellar
+from numpy.typing import ArrayLike
 
 __all__ = [
     "ExtendedModelGalaxy",
@@ -191,11 +199,80 @@ def check_coverage(obs_wavelength: float, filter_limits: dict = NIRISS_FILTER_LI
         ``False``.
     """
 
+    obs_wavelength = np.atleast_1d(obs_wavelength)
     for k, v in filter_limits.items():
-        if (obs_wavelength >= v[0]) and (obs_wavelength <= v[-1]):
+        if (obs_wavelength >= v[0]).all() and (obs_wavelength <= v[-1]).all():
             return True
 
     return False
+
+
+class ExtendedSFH(BagpipesSFH):
+    """
+    An extended version of `bagpipes.star_formation_history`.
+    """
+
+    def update(self, model_components: dict, fast_spec_only: bool = False):
+        """
+        Update the SFH.
+
+        Parameters
+        ----------
+        model_components : dict
+            The new components of the model galaxy.
+        fast_spec_only : bool, optional
+            Only perform the operations necessary to generate a model
+            spectrum (i.e. do not calculate derived quantities). By
+            default False.
+        """
+
+        self.model_components = model_components
+        self.redshift = self.model_components["redshift"]
+
+        self.sfh = np.zeros_like(self.ages)  # Star-formation history
+
+        self.unphysical = False
+        self.age_of_universe = 10**9 * np.interp(
+            self.redshift, utils.z_array, utils.age_at_z
+        )
+
+        # Calculate the star-formation history for each of the components.
+        for i in range(len(self.components)):
+
+            name = self.components[i]
+            func = self.components[i]
+
+            if name not in dir(self):
+                func = name[:-1]
+
+            self.component_sfrs[name] = np.zeros_like(self.ages)
+            self.component_weights[name] = np.zeros_like(config.age_sampling)
+
+            getattr(self, func)(self.component_sfrs[name], self.model_components[name])
+
+            # Normalise to the correct mass.
+            mass_norm = np.sum(self.component_sfrs[name] * self.age_widths)
+            desired_mass = 10 ** self.model_components[name]["massformed"]
+
+            self.component_sfrs[name] *= desired_mass / mass_norm
+            self.sfh += self.component_sfrs[name]
+
+            # Sum up contributions to each age bin to create SSP weights
+            weights = self.component_sfrs[name] * self.age_widths
+            self.component_weights[name] = np.histogram(
+                self.ages, bins=config.age_bins, weights=weights
+            )[0]
+        # Check no stars formed before the Big Bang.
+        if self.sfh[self.ages > self.age_of_universe].max() > 0.0:
+            self.unphysical = True
+
+        # ceh: Chemical enrichment history object
+        self.ceh = chemical_enrichment_history(
+            self.model_components, self.component_weights
+        )
+
+        if not fast_spec_only:
+            self._calculate_derived_quantities()
 
 
 class ExtendedModelGalaxy(BagpipesModelGalaxy):
@@ -204,13 +281,117 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
 
     This class allows a model spectrum to be generated, with one or more
     nebular emission lines excluded.
+
+    Parameters
+    ----------
+    model_components : dict
+        A dictionary containing information about the model you wish to
+        generate.
+    filt_list : list, optional
+        A list of paths to filter curve files, which should contain a
+        column of wavelengths in angstroms followed by a column of
+        transmitted fraction values. Only required if photometric output
+        is desired.
+    spec_wavs : array,optional
+        An array of wavelengths at which spectral fluxes should be
+        returned. Only required of spectroscopic output is desired.
+    spec_units : str, optional
+        The units the output spectrum will be returned in. Default is
+        "ergscma" for ergs per second per centimetre squared per
+        angstrom, can also be set to "mujy" for microjanskys.
+    phot_units : str, optional
+        The units the output spectrum will be returned in. Default is
+        "ergscma" for ergs per second per centimetre squared per
+        angstrom, can also be set to "mujy" for microjanskys.
+    index_list : list, optional
+        A list of dicts containining definitions for spectral indices.
     """
+
+    def __init__(
+        self,
+        model_components,
+        filt_list=None,
+        spec_wavs=None,
+        spec_units="ergscma",
+        phot_units="ergscma",
+        index_list=None,
+    ):
+
+        if (spec_wavs is not None) and (index_list is not None):
+            raise ValueError("Cannot specify both spec_wavs and index_list.")
+
+        if model_components["redshift"] > config.max_redshift:
+            raise ValueError(
+                "Bagpipes attempted to create a model with too "
+                "high redshift. Please increase max_redshift in "
+                "bagpipes/config.py before making this model."
+            )
+
+        self.spec_wavs = spec_wavs
+        self.filt_list = filt_list
+        self.spec_units = spec_units
+        self.phot_units = phot_units
+        self.index_list = index_list
+
+        if self.index_list is not None:
+            self.spec_wavs = self._get_index_spec_wavs(model_components)
+
+        # Create a filter_set object to manage the filter curves.
+        if filt_list is not None:
+            self.filter_set = filters.filter_set(filt_list)
+
+        # Calculate the optimal wavelength sampling for the model.
+        self.wavelengths = self._get_wavelength_sampling()
+
+        # Resample the filter curves onto wavelengths.
+        if filt_list is not None:
+            self.filter_set.resample_filter_curves(self.wavelengths)
+
+        # Set up a filter_set for calculating rest-frame UVJ magnitudes.
+        uvj_filt_list = np.loadtxt(
+            utils.install_dir + "/filters/UVJ.filt_list", dtype="str"
+        )
+
+        self.uvj_filter_set = filters.filter_set(uvj_filt_list)
+        self.uvj_filter_set.resample_filter_curves(self.wavelengths)
+
+        # Create relevant physical models.
+        self.sfh = ExtendedSFH(model_components)
+        self.stellar = stellar(self.wavelengths)
+        self.igm = igm(self.wavelengths)
+        self.nebular = False
+        self.dust_atten = False
+        self.dust_emission = False
+        self.agn = False
+
+        if "nebular" in list(model_components):
+            if "velshift" not in model_components["nebular"]:
+                model_components["nebular"]["velshift"] = 0.0
+
+            self.nebular = nebular(
+                self.wavelengths, model_components["nebular"]["velshift"]
+            )
+
+            if "metallicity" in list(model_components["nebular"]):
+                self.neb_sfh = ExtendedSFH(model_components)
+
+        if "dust" in list(model_components):
+            self.dust_emission = dust_emission(self.wavelengths)
+            self.dust_atten = dust_attenuation(
+                self.wavelengths, model_components["dust"]
+            )
+
+        if "agn" in list(model_components):
+            self.agn = agn(self.wavelengths)
+
+        self.update(model_components)
 
     def update(
         self,
         model_components: dict,
         cont_only: bool = False,
         rm_line: list[str] | None = None,
+        fast_spec_only: bool = True,
     ):
         """
         Update the model outputs based on ``model_components``.
@@ -233,10 +414,14 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
             naming convention (see `here
             <https://bagpipes.readthedocs.io/en/latest/model_galaxies.html#getting-observables-line-fluxes>`__
             for more details). By default ``None``.
+        fast_spec_only : bool, optional
+            Only perform the operations necessary to generate a model
+            spectrum (i.e. do not calculate derived quantities). By
+            default False.
         """
 
         self.model_comp = model_components
-        self.sfh.update(model_components)
+        self.sfh.update(model_components, fast_spec_only)
         if self.dust_atten:
             self.dust_atten.update(model_components["dust"])
 
@@ -253,7 +438,10 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
 
         else:
             self._calculate_full_spectrum(
-                model_components, cont_only=cont_only, rm_line=rm_line
+                model_components,
+                cont_only=cont_only,
+                rm_line=rm_line,
+                fast_spec_only=fast_spec_only,
             )
 
         if self.spec_wavs is not None:
@@ -279,27 +467,30 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
 
                 self.spectrum[:, 1] += agn_interp
 
-        if self.filt_list is not None:
-            self._calculate_photometry(model_components["redshift"])
+        if not fast_spec_only:
 
-        if not self.sfh.unphysical:
-            self._calculate_uvj_mags()
+            if self.filt_list is not None:
+                self._calculate_photometry(model_components["redshift"])
 
-        # Deal with any spectral index calculations.
-        if self.index_list is not None:
-            self.index_names = [ind["name"] for ind in self.index_list]
+            if not self.sfh.unphysical:
+                self._calculate_uvj_mags()
 
-            self.indices = np.zeros(len(self.index_list))
-            for i in range(self.indices.shape[0]):
-                self.indices[i] = measure_index(
-                    self.index_list[i], self.spectrum, model_components["redshift"]
-                )
+            # Deal with any spectral index calculations.
+            if self.index_list is not None:
+                self.index_names = [ind["name"] for ind in self.index_list]
+
+                self.indices = np.zeros(len(self.index_list))
+                for i in range(self.indices.shape[0]):
+                    self.indices[i] = measure_index(
+                        self.index_list[i], self.spectrum, model_components["redshift"]
+                    )
 
     def _calculate_full_spectrum(
         self,
         model_comp: dict,
         cont_only: bool = True,
         rm_line: list[str] | str | None = None,
+        fast_spec_only: bool = True,
     ):
         """
         Calculate a full model spectrum given a set of model components.
@@ -324,6 +515,10 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
             naming convention (see `here
             <https://bagpipes.readthedocs.io/en/latest/model_galaxies.html#getting-observables-line-fluxes>`__
             for more details). By default ``None``.
+        fast_spec_only : bool, optional
+            Only perform the operations necessary to generate a model
+            spectrum (i.e. do not calculate derived quantities). By
+            default False.
         """
 
         t_bc = 0.01
@@ -343,7 +538,7 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
                     if isinstance(neb_comp[comp], dict):
                         neb_comp[comp]["metallicity"] = nebular_metallicity
 
-                self.neb_sfh.update(neb_comp)
+                self.neb_sfh.update(neb_comp, fast_spec_only)
                 grid = self.neb_sfh.ceh.grid
 
             em_lines += self.nebular.line_fluxes(

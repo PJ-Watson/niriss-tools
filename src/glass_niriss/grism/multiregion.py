@@ -3,6 +3,8 @@ Functions and classing related to multi-region grism fitting.
 """
 
 import multiprocessing
+import sys
+import traceback
 from copy import deepcopy
 from functools import partial
 from itertools import product
@@ -387,50 +389,82 @@ class RegionsMultiBeam(MultiBeam):
         cont_only=False,
         rm_line=None,
         rows=None,
+        memmap: bool = False,
     ):
         seg_id = int(seg_id)
 
-        shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
-        seg_maps = np.ndarray(seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf)
-        shm_temps = shared_memory.SharedMemory(name=shared_models_name)
-        temps_arr = np.ndarray(models_shape, dtype=float, buffer=shm_temps.buf)
+        try:
 
-        with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-            samples2d = np.array(post_file["samples2d"])
+            if memmap:
+                # init_arr = np.memmap(shared_input, dtype=float, shape=init_shape, mode="r+")
+                # output_arr = np.memmap(
+                #     shared_output, dtype=float, shape=output_shape, mode="r+"
+                # )
+                seg_maps = np.memmap(
+                    shared_seg_name, dtype=float, shape=seg_maps_shape, mode="r+"
+                )
+                temps_arr = np.memmap(
+                    shared_models_name, dtype=float, shape=models_shape, mode="r+"
+                )
+            else:
+                # # print (f"{seg_idx=}, {seg_id=}")
+                # shm_init = shared_memory.SharedMemory(name=shared_input)
+                # init_arr = np.ndarray(init_shape, dtype=float, buffer=shm_init.buf)
+                # shm_output = shared_memory.SharedMemory(name=shared_output)
+                # output_arr = np.ndarray(output_shape, dtype=float, buffer=shm_output.buf)
 
-        for sample_i, row in enumerate(rows):
+                shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
+                seg_maps = np.ndarray(
+                    seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf
+                )
+                shm_temps = shared_memory.SharedMemory(name=shared_models_name)
+                temps_arr = np.ndarray(models_shape, dtype=float, buffer=shm_temps.buf)
 
-            temp_resamp_1d = pipes_sampler.sample(
-                samples2d[row],
-                spec_wavs=spec_wavs,
-                cont_only=cont_only,
-                rm_line=rm_line,
-            )
+            with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
+                samples2d = np.array(post_file["samples2d"])
 
-            i0 = 0
-            for k_i, (k, v) in enumerate(beam_info.items()):
-                # stack_idxs = np.r_["0,2", *v["flat_slice"]]
-                for ib in v["list_idx"]:
-                    beam = beams_object[ib]
+            for sample_i, row in enumerate(rows):
 
-                    beam_seg = seg_maps[seg_idx][ib]
-                    tmodel = beam.compute_model(
-                        spectrum_1d=temp_resamp_1d,
-                        thumb=beam.beam.direct * beam_seg,
-                        in_place=False,
-                        is_cgs=True,
-                    )
+                temp_resamp_1d = pipes_sampler.sample(
+                    samples2d[row],
+                    spec_wavs=spec_wavs,
+                    cont_only=cont_only,
+                    rm_line=rm_line,
+                )
+
+                i0 = 0
+                for k_i, (k, v) in enumerate(beam_info.items()):
+                    # stack_idxs = np.r_["0,2", *v["flat_slice"]]
+                    for ib in v["list_idx"]:
+                        beam = beams_object[ib]
+
+                        beam_seg = seg_maps[seg_idx][ib]
+                        tmodel = beam.compute_model(
+                            spectrum_1d=temp_resamp_1d,
+                            thumb=beam.beam.direct * beam_seg,
+                            in_place=False,
+                            is_cgs=True,
+                        )
+                        temps_arr[
+                            (n_samples * seg_idx) + sample_i + temp_offset,
+                            i0 : i0 + np.prod(v["2d_shape"]),
+                        ] += tmodel
+
                     temps_arr[
                         (n_samples * seg_idx) + sample_i + temp_offset,
                         i0 : i0 + np.prod(v["2d_shape"]),
-                    ] += tmodel
+                    ] /= len(v["list_idx"])
 
-                temps_arr[
-                    (n_samples * seg_idx) + sample_i + temp_offset,
-                    i0 : i0 + np.prod(v["2d_shape"]),
-                ] /= len(v["list_idx"])
+                    i0 += np.prod(v["2d_shape"])
 
-                i0 += np.prod(v["2d_shape"])
+            if memmap:
+                temps_arr.flush()
+
+        except:
+            raise Exception(
+                shared_models_name
+                + "".join(traceback.format_exception(*sys.exc_info()))
+            )
 
     @staticmethod
     def _gen_beam_templates_from_pipes(
@@ -449,55 +483,83 @@ class RegionsMultiBeam(MultiBeam):
         rm_line=None,
         rows=None,
         coeffs=None,
+        memmap: bool = False,
     ):
         seg_id = int(seg_id)
 
-        shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
-        seg_maps = np.ndarray(seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf)
-        shm_models = shared_memory.SharedMemory(name=shared_models_name)
-        models_arr = np.ndarray(models_shape, dtype=float, buffer=shm_models.buf)
+        try:
 
-        with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-            samples2d = np.array(post_file["samples2d"])
+            if memmap:
+                # init_arr = np.memmap(shared_input, dtype=float, shape=init_shape, mode="r+")
+                # output_arr = np.memmap(
+                #     shared_output, dtype=float, shape=output_shape, mode="r+"
+                # )
+                seg_maps = np.memmap(
+                    shared_seg_name, dtype=float, shape=seg_maps_shape, mode="r+"
+                )
+                models_arr = np.memmap(
+                    shared_models_name, dtype=float, shape=models_shape, mode="r+"
+                )
+            else:
+                shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
+                seg_maps = np.ndarray(
+                    seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf
+                )
+                shm_models = shared_memory.SharedMemory(name=shared_models_name)
+                models_arr = np.ndarray(
+                    models_shape, dtype=float, buffer=shm_models.buf
+                )
 
-        for sample_i, row in enumerate(rows):
+            with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
+                samples2d = np.array(post_file["samples2d"])
 
-            temp_resamp_1d = pipes_sampler.sample(
-                samples2d[row],
-                spec_wavs=spec_wavs,
-                cont_only=cont_only,
-                rm_line=rm_line,
+            for sample_i, row in enumerate(rows):
+
+                temp_resamp_1d = pipes_sampler.sample(
+                    samples2d[row],
+                    spec_wavs=spec_wavs,
+                    cont_only=cont_only,
+                    rm_line=rm_line,
+                )
+
+                i0 = 0
+                for k_i, (k, v) in enumerate(beam_info.items()):
+                    # stack_idxs = np.r_["0,2", *v["flat_slice"]]
+                    for ib in v["list_idx"]:
+                        # beam = beams_object[ib]
+
+                        # beam_seg = seg_maps[seg_idx][ib]
+                        tmodel = beams_object[ib].compute_model(
+                            spectrum_1d=temp_resamp_1d,
+                            thumb=beams_object[ib].beam.direct * seg_maps[seg_idx][ib],
+                            in_place=False,
+                            is_cgs=True,
+                        )
+                        # beam.beam.model += coeffs[f"{seg_id}_{sample_i}"]*tmodel.reshape(beam.beam.model.shape)
+                        models_arr[i0 : i0 + np.prod(v["2d_shape"])] += (
+                            coeffs[f"{seg_id}_{sample_i}"] * tmodel
+                        )  # .reshape(beam.beam.model.shape)
+                        # print (beam.model.shape)
+                        # temps_arr[
+                        #     (n_samples * seg_idx) + sample_i + temp_offset,
+                        #     i0 : i0 + np.prod(v["2d_shape"]),
+                        # ] += tmodel
+
+                        # temps_arr[
+                        #     (n_samples * seg_idx) + sample_i + temp_offset,
+                        #     i0 : i0 + np.prod(v["2d_shape"]),
+                        # ] /= len(v["list_idx"])
+
+                        i0 += np.prod(v["2d_shape"])
+
+            if memmap:
+                models_arr.flush()
+
+        except:
+            raise Exception(
+                shared_models_name
+                + "".join(traceback.format_exception(*sys.exc_info()))
             )
-
-            i0 = 0
-            for k_i, (k, v) in enumerate(beam_info.items()):
-                # stack_idxs = np.r_["0,2", *v["flat_slice"]]
-                for ib in v["list_idx"]:
-                    # beam = beams_object[ib]
-
-                    # beam_seg = seg_maps[seg_idx][ib]
-                    tmodel = beams_object[ib].compute_model(
-                        spectrum_1d=temp_resamp_1d,
-                        thumb=beams_object[ib].beam.direct * seg_maps[seg_idx][ib],
-                        in_place=False,
-                        is_cgs=True,
-                    )
-                    # beam.beam.model += coeffs[f"{seg_id}_{sample_i}"]*tmodel.reshape(beam.beam.model.shape)
-                    models_arr[i0 : i0 + np.prod(v["2d_shape"])] += (
-                        coeffs[f"{seg_id}_{sample_i}"] * tmodel
-                    )  # .reshape(beam.beam.model.shape)
-                    # print (beam.model.shape)
-                    # temps_arr[
-                    #     (n_samples * seg_idx) + sample_i + temp_offset,
-                    #     i0 : i0 + np.prod(v["2d_shape"]),
-                    # ] += tmodel
-
-                    # temps_arr[
-                    #     (n_samples * seg_idx) + sample_i + temp_offset,
-                    #     i0 : i0 + np.prod(v["2d_shape"]),
-                    # ] /= len(v["list_idx"])
-
-                    i0 += np.prod(v["2d_shape"])
 
     @staticmethod
     def _reduce_seg_map(
@@ -690,6 +752,7 @@ class RegionsMultiBeam(MultiBeam):
             fit_info_str = fit_info_str.replace("np.np.", "np.")
             fit_instructions = eval(fit_info_str)
             n_fit_comps = test_post["samples2d"].shape[1]
+            n_post_samples = test_post["samples2d"].shape[0]
 
         if out_dir is None:
             out_dir = Path.cwd()
@@ -803,29 +866,52 @@ class RegionsMultiBeam(MultiBeam):
                 )
                 pool.starmap(multi_fn, enumerate(self.regions_seg_ids))
 
-        print(np.nansum(oversamp_seg_maps))
+        # print(np.nansum(oversamp_seg_maps))
 
         oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
 
-        print(np.nansum(oversamp_seg_maps))
+        # print(np.nansum(oversamp_seg_maps))
 
-        plt.imshow(oversamp_seg_maps[0, 0])
-        plt.show()
+        # plt.imshow(oversamp_seg_maps[0, 0])
+        # plt.show()
 
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
         stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
         temp_offset = A.shape[0] - self.N + num_stacks
 
-        shm_stacked_A = smm.SharedMemory(
-            size=np.dtype(float).itemsize * (temp_offset + NTEMP) * stacked_shape
-        )
-        stacked_A = np.ndarray(
-            (temp_offset + NTEMP, stacked_shape),
-            dtype=float,
-            buffer=shm_stacked_A.buf,
-        )
+        stacked_A_shape = (temp_offset + NTEMP, stacked_shape)
+
+        if memmap:
+            stacked_A = np.memmap(
+                temp_dir / "memmap_stacked_A.dat",
+                dtype=float,
+                mode="w+",
+                shape=stacked_A_shape,
+            )
+        else:
+            shm_stacked_A = smm.SharedMemory(
+                size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
+            )
+            stacked_A = np.ndarray(
+                stacked_A_shape,
+                dtype=float,
+                buffer=shm_stacked_A.buf,
+            )
+
+        print("MEMMAP", memmap)
+
+        # shm_stacked_A = smm.SharedMemory(
+        #     size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
+        # )
+        # stacked_A = np.ndarray(
+        #     stacked_A_shape,
+        #     dtype=float,
+        #     buffer=shm_stacked_A.buf,
+        # )
         stacked_A.fill(0.0)
+
+        print(stacked_A.shape, stacked_A_shape)
 
         # Offset for background
         if fit_background:
@@ -904,10 +990,20 @@ class RegionsMultiBeam(MultiBeam):
         # !! This can be placed outside the iteration loop
         stacked_fn = partial(
             self._gen_stacked_templates_from_pipes,
-            shared_seg_name=shm_seg_maps.name,
-            seg_maps_shape=oversamp_seg_maps.shape,
-            shared_models_name=shm_stacked_A.name,
-            models_shape=stacked_A.shape,
+            shared_seg_name=(
+                temp_dir / "memmap_oversamp_seg_maps.dat"
+                if memmap
+                else shm_seg_maps.name
+            ),
+            seg_maps_shape=oversamp_seg_maps_shape,
+            # shared_seg_name=shm_seg_maps.name,
+            # seg_maps_shape=oversamp_seg_maps_shape,
+            shared_models_name=(
+                temp_dir / "memmap_stacked_A.dat" if memmap else shm_stacked_A.name
+            ),
+            models_shape=stacked_A_shape,
+            # shared_models_name= shm_stacked_A.name,
+            # models_shape=stacked_A_shape,
             posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
             n_samples=n_samples,
             spec_wavs=spec_wavs,
@@ -915,6 +1011,7 @@ class RegionsMultiBeam(MultiBeam):
             temp_offset=temp_offset,
             cont_only=False,
             rm_line=None,
+            memmap=memmap,
         )
 
         if (not output_table_path.is_file()) or (overwrite):
@@ -924,7 +1021,7 @@ class RegionsMultiBeam(MultiBeam):
             iterations = np.arange(num_iters)
             for iteration in iterations:
                 rows = rng.choice(
-                    np.arange(500, dtype=int), size=n_samples, replace=False
+                    np.arange(n_post_samples, dtype=int), size=n_samples, replace=False
                 )
                 print(f"Iteration {iteration}, {rows=}")
 
@@ -1040,6 +1137,7 @@ class RegionsMultiBeam(MultiBeam):
 
         if save_stacks:
             print("Generating models...")
+            # import traceback
             with multiprocessing.Pool(
                 processes=cpu_count,
                 initializer=_init_pipes_sampler,
@@ -1054,12 +1152,13 @@ class RegionsMultiBeam(MultiBeam):
                         stacked_fn,
                         (s_i, s),
                         kwds={"rows": best_rows},
-                        # error_callback=print,
+                        error_callback=print,
+                        # error_callback=traceback.format_exc,
                     )
                 pool.close()
                 pool.join()
 
-            stacked_modelf = np.dot(out_coeffs, stacked_A)
+            stacked_modelf = np.dot(out_coeffs, stacked_A)  # .copy()
 
             stacked_A[temp_offset:].fill(0.0)
 
@@ -1083,7 +1182,7 @@ class RegionsMultiBeam(MultiBeam):
                 pool.close()
                 pool.join()
 
-            stacked_contf = np.dot(out_coeffs, stacked_A)
+            stacked_contf = np.dot(out_coeffs, stacked_A)  # .copy()
 
             stacked_hdul = fits.HDUList(fits.PrimaryHDU())
 
@@ -1145,23 +1244,61 @@ class RegionsMultiBeam(MultiBeam):
             for k_i, (k, v) in enumerate(beam_info.items()):
                 beam_models_len += np.prod(v["2d_shape"]) * len(v["list_idx"])
 
-            shm_beam_models = smm.SharedMemory(
-                size=np.dtype(float).itemsize * beam_models_len
-            )
-            flat_beam_models = np.ndarray(
-                (beam_models_len),
-                dtype=float,
-                buffer=shm_beam_models.buf,
-            )
+            # shm_beam_models = smm.SharedMemory(
+            #     size=np.dtype(float).itemsize * beam_models_len
+            # )
+            # flat_beam_models = np.ndarray(
+            #     (beam_models_len),
+            #     dtype=float,
+            #     buffer=shm_beam_models.buf,
+            # )
+
+            if memmap:
+                flat_beam_models = np.memmap(
+                    temp_dir / "memmap_beams_model.dat",
+                    dtype=float,
+                    mode="w+",
+                    shape=(beam_models_len),
+                )
+            else:
+                # shm_stacked_A = smm.SharedMemory(
+                #     size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
+                # )
+                # stacked_A = np.ndarray(
+                #     stacked_A_shape,
+                #     dtype=float,
+                #     buffer=shm_stacked_A.buf,
+                # )
+
+                shm_beam_models = smm.SharedMemory(
+                    size=np.dtype(float).itemsize * beam_models_len
+                )
+                flat_beam_models = np.ndarray(
+                    (beam_models_len),
+                    dtype=float,
+                    buffer=shm_beam_models.buf,
+                )
 
             line_hdu = None
             saved_lines = []
 
             beams_fn = partial(
                 self._gen_beam_templates_from_pipes,
-                shared_seg_name=shm_seg_maps.name,
-                seg_maps_shape=oversamp_seg_maps.shape,
-                shared_models_name=shm_beam_models.name,
+                # shared_seg_name=shm_seg_maps.name,
+                # seg_maps_shape=oversamp_seg_maps.shape,
+                # shared_models_name=shm_beam_models.name,
+                # models_shape=flat_beam_models.shape,
+                shared_seg_name=(
+                    temp_dir / "memmap_oversamp_seg_maps.dat"
+                    if memmap
+                    else shm_seg_maps.name
+                ),
+                seg_maps_shape=oversamp_seg_maps_shape,
+                shared_models_name=(
+                    temp_dir / "memmap_beams_model.dat"
+                    if memmap
+                    else shm_beam_models.name
+                ),
                 models_shape=flat_beam_models.shape,
                 posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
                 n_samples=n_samples,
@@ -1171,6 +1308,7 @@ class RegionsMultiBeam(MultiBeam):
                 cont_only=False,
                 rows=[int(s) for s in output_table["rows"][best_iter].split(";")],
                 coeffs=output_table[best_iter],
+                memmap=memmap,
             )
 
             for l_i, l_v in enumerate(use_lines):
@@ -1255,6 +1393,12 @@ class RegionsMultiBeam(MultiBeam):
                     " ".join(saved_lines),
                     "Lines in this file",
                 )
+
+                line_wcs = WCS(line_hdu[1].header)
+                segm = self.drizzle_segmentation(wcsobj=line_wcs)
+                seg_hdu = fits.ImageHDU(data=segm.astype(np.int32), name="SEG")
+                line_hdu.insert(1, seg_hdu)
+
                 line_hdu.writeto(
                     f"regions_{self.id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
                     output_verify="silentfix",

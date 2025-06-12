@@ -425,17 +425,18 @@ def regen_catalogue(
     import glob
     import os
 
+    #     )
+    import sep
     from grizli import utils
 
-    try:
-        import sep_pjw as sep
-    except ImportError:
-        print(
-            """
-    Couldn't import `sep_pjw`. SEP is no longer maintained; install the
-    fork with `python -m pip install sep-pjw`.
-    """
-        )
+    # try:
+    #     import sep_pjw as sep
+    # except ImportError:
+    #     print(
+    #         """
+    # Couldn't import `sep_pjw`. SEP is no longer maintained; install the
+    # fork with `python -m pip install sep-pjw`.
+    # """
 
     sep.set_extract_pixstack(extract_pixstack)
     sep.set_sub_object_limit(sub_object_limit)
@@ -667,11 +668,13 @@ def regen_catalogue(
             seg_img = SegmentationImage(new_seg_map)
 
             if detection_params.get("filter_kernel", None) is not None:
-                from astropy.convolution import convolve
+                from astropy.convolution import convolve_fft as convolve
 
                 conv_data = convolve(data_bkg, detection_params["filter_kernel"])
             else:
                 conv_data = data_bkg
+
+            print("Convolved")
 
             source_cat = SourceCatalog(
                 data=data_bkg,
@@ -679,6 +682,7 @@ def regen_catalogue(
                 convolved_data=conv_data,
                 error=err_data,
                 mask=mask,
+                progress_bar=True,
             )
 
             print(source_cat.to_table())
