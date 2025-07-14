@@ -200,11 +200,10 @@ def check_coverage(obs_wavelength: float, filter_limits: dict = NIRISS_FILTER_LI
     """
 
     obs_wavelength = np.atleast_1d(obs_wavelength)
-    for k, v in filter_limits.items():
-        if (obs_wavelength >= v[0]).all() and (obs_wavelength <= v[-1]).all():
-            return True
-
-    return False
+    covered = np.zeros((len(filter_limits), *obs_wavelength.shape), dtype=bool)
+    for i, (k, v) in enumerate(filter_limits.items()):
+        covered[i] = (obs_wavelength >= v[0]) & (obs_wavelength <= v[-1])
+    return np.bitwise_or.reduce(covered, axis=0)
 
 
 class ExtendedSFH(BagpipesSFH):

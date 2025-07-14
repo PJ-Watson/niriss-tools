@@ -32,6 +32,10 @@ from pandas._libs.hashtable import SIZE_HINT_LIMIT, duplicated
 from pandas.core import algorithms
 from pandas.core.sorting import get_group_index
 from reproject import reproject_interp
+from grizli import utils as grizli_utils
+from grizli.model import GrismDisperser
+
+from time import time
 
 from glass_niriss.grism.specgen import (
     CLOUDY_LINE_MAP,
@@ -595,6 +599,568 @@ class RegionsMultiBeam(MultiBeam):
         if memmap:
             output_arr.flush()
 
+    def _gen_stacked_beams(
+        self, pixfrac=1.0, kernel="square", dfillval=0, spatial_scale=1.0
+    ):
+        # for i, beam in enumerate(self.beams):
+        #     print(beam)
+        # print(self.PA)
+        print(dir(self))
+        # print(self.ra, self.dec)
+        # print(dir(self.beams[0].beam))
+        # return
+        test_beam = self.beams[14]
+        # print (test_beam.full_2d_wcs)
+        # print (test_beam.trace_table)
+        # print (test_beam.get_2d_wcs)
+        # print(dir(test_beam.direct))
+        print(dir(test_beam))
+        print(dir(test_beam.beam))
+        # print(test_beam.direct.wcs)
+        # print(test_beam.grism.wcs)
+        print(
+            test_beam.beam.xc,
+            test_beam.beam.xcenter,
+            test_beam.beam.x0,
+            test_beam.beam.xoffset,
+            test_beam.beam.dx,
+            test_beam.beam.dxpix,
+            test_beam.beam.yc,
+            test_beam.beam.ycenter,
+            test_beam.beam.yoffset,
+        )
+        print(
+            test_beam.grism.wcs.all_world2pix(
+                [[self.ra, self.dec]],
+                1,
+                # [test_beam.grism.wcs.wcs.crpix], 1
+            ).flatten()
+        )
+        test_dir = np.zeros((2, *test_beam.beam.direct.shape))
+        # return
+        # fig, axs = plt.subplots(2,2)
+        # for a, d in zip(axs.ravel(), test_beam.direct.data.values()):
+        #     a.imshow(d)
+        # plt.show()
+
+        from drizzlepac import adrizzle
+        from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
+        from reproject import reproject_adaptive
+
+        adrizzle.log.setLevel("ERROR")
+        drizzler = adrizzle.do_driz
+
+        new_multibeam = []
+
+        # data
+        for filt, pa_info in self.PA.items():
+            # print (pa_info)
+            for pa, beam_idxs in pa_info.items():
+                # print(pa, beam_idxs)
+                # if filt != "F200W":
+                #     continue
+                # if float(pa) != 341.0:
+                #     continue
+                # fig, axs = plt.subplots(3, 3, sharex=True, sharey=True)
+                # for ax_i, xmult in enumerate([-1, 0, 1]):
+                #     for ax_j, ymult in enumerate([-1, 0, 1]):
+                #         # for ymult
+                #         # print(float(pa), 341.0)
+                #         # use_beam = None
+                #         # min_off = 1e10
+                #         # for i in beam_idxs:
+                #         #     if self.beams[i].beam.ycenter < min_off:
+                #         #         use_beam = i
+
+                # new_beam = deepcopy(self.beams[beam_idxs[0]])
+                # # print(dir(new_beam.direct.wcs))
+                # # print(new_beam.direct.wcs)
+                # # print(new_beam.grism.wcs)
+                # shift_crpix = (
+                #     (np.asarray(new_beam.direct.data["REF"].shape)) / 2
+                #     - np.array(
+                #         test_beam.direct.wcs.all_world2pix(
+                #             [[self.ra, self.dec]],
+                #             0,
+                #             # [test_beam.grism.wcs.wcs.crpix], 1
+                #         ).flatten()
+                #     )
+                #     + 1
+                # )
+
+                # # Set centre of direct image to the actual coordinates
+                # direct_cen = (np.asarray(new_beam.direct.data["REF"].shape)) / 2
+                # # print(cen)
+                # new_beam.direct.wcs.wcs.crpix = direct_cen
+                # new_beam.direct.wcs.wcs.crval = [self.ra, self.dec]
+
+                # # Align beam to direct
+                # direct_cen = (np.asarray(new_beam.direct.data["REF"].shape)) / 2
+                # # print(cen)
+                # # print ("SHIFT", shift_crpix)
+                # new_beam.grism.wcs = grizli_utils.transform_wcs(
+                #     new_beam.grism.wcs, translation=shift_crpix
+                # )
+                #         # new_beam.grism.wcs.wcs.crpix = [
+                #         #     # direct_cen[0] + 12,
+                #         #     direct_cen[0]-45,
+                #         #     direct_cen[1],
+                #         # ]
+                #         # new_beam.grism.wcs.wcs.crval = [self.ra, self.dec]
+                #         # print(new_beam.grism.wcs)
+
+                #         # print("XCenter", [self.beams[i].beam.yoffset for i in beam_idxs])
+                #         # print("XCenter", [self.beams[i].beam.xoffset for i in beam_idxs])
+
+                #         sh = new_beam.sh
+                #         outsci = np.zeros(sh, dtype=np.float32)
+                #         outwht = np.zeros(sh, dtype=np.float32)
+                #         outctx = np.zeros(sh, dtype=np.int32)
+
+                #         outvar = np.zeros(sh, dtype=np.float32)
+                #         outwv = np.zeros(sh, dtype=np.float32)
+                #         outcv = np.zeros(sh, dtype=np.int32)
+
+                #         outdir = np.zeros(
+                #             new_beam.direct.data["REF"].shape, dtype=np.float32
+                #         )
+                #         outwd = np.zeros(
+                #             new_beam.direct.data["REF"].shape, dtype=np.float32
+                #         )
+                #         outcd = np.zeros(
+                #             new_beam.direct.data["REF"].shape, dtype=np.int32
+                #         )
+
+                #         grism_data = [
+                #             self.beams[i].grism.data["SCI"] for i in beam_idxs
+                #         ]
+                #         direct_data = [
+                #             self.beams[i].direct.data["REF"] for i in beam_idxs
+                #         ]
+
+                #         # for i, beam in enumerate([self.beams[i] for i in beam_idxs]):
+                #         # beam_header, beam_wcs = beam.full_2d_wcs()
+                #         # print (beam_wcs, beam.grism.wcs)
+                #         # if not hasattr(beam_wcs, "pixel_shape"):
+                #         #     beam_wcs.pixel_shape = beam_wcs._naxis1, beam_wcs._naxis2
+
+                #         # if not hasattr(beam_wcs, "_naxis1"):
+                #         #     beam_wcs._naxis1, beam_wcs._naxis2 = beam_wcs._naxis
+                #         for i, idx in enumerate(beam_idxs):
+
+                #             beam = self.beams[idx]
+                #             direct_wcs_i = beam.direct.wcs
+                #             grism_wcs_i = beam.grism.wcs.copy()
+
+                #             grism_wcs_i.wcs.crpix = [
+                #                 grism_wcs_i.wcs.crpix[0] + xmult * beam.beam.xcenter,
+                #                 grism_wcs_i.wcs.crpix[1] + ymult * beam.beam.ycenter,
+                #             ]
+                #             # print (direct_wcs_i, grism_wcs_i)
+                #             # print(beam.beam.ycenter)
+                #             # if not hasattr(grism_wcs_i, "_naxis1"):
+                #             # grism_wcs_i._naxis1, grism_wcs_i._naxis2 = grism_wcs_i._naxis[::-1]
+                #             # grism_wcs_i._naxis =grism_wcs_i._naxis[::-1]
+
+                #             grism_wht = beam.ivar
+                #             grism_wht[~np.isfinite(grism_wht)] = 0.0
+                #             wht_mask = grism_wht == 0
+                #             med_wht = np.median(grism_wht[~wht_mask])
+                #             grism_wht[wht_mask] = med_wht
+                #             # print (dir(beam.grism.data))
+                #             # print (beam.grism.data.keys())
+                #             # print (dir(beam.grism))
+                #             # plt.imshow(grism_data[i])
+                #             # plt.imshow(beam.grism.data["ERR"])
+                #             # plt.show()
+
+                #             drizzler(
+                #                 direct_data[i],
+                #                 direct_wcs_i,
+                #                 np.ones_like(direct_data[i]),
+                #                 new_beam.direct.wcs,
+                #                 outdir,
+                #                 outwd,
+                #                 outcd,
+                #                 1.0,
+                #                 "cps",
+                #                 1,
+                #                 wcslin_pscale=1.0,
+                #                 uniqid=1,
+                #                 pixfrac=pixfrac,
+                #                 kernel=kernel,
+                #                 fillval=dfillval,
+                #             )
+                #             drizzler(
+                #                 grism_data[i],
+                #                 # beam.grism.wcs,
+                #                 grism_wcs_i,
+                #                 # grism_wht,
+                #                 np.ones_like(grism_data[i]),
+                #                 new_beam.grism.wcs,
+                #                 outsci,
+                #                 outwht,
+                #                 outctx,
+                #                 1.0,
+                #                 "cps",
+                #                 1,
+                #                 wcslin_pscale=1.0,
+                #                 uniqid=1,
+                #                 pixfrac=pixfrac,
+                #                 kernel=kernel,
+                #                 fillval=dfillval,
+                #             )
+
+                #         # Correct for drizzle scaling
+                #         area_ratio = 1.0 / new_beam.grism.wcs.pscale ** 2
+
+                #         # Preserve flux (has to preserve aperture flux along spatial axis but
+                #         # average in spectral axis).
+                #         # area_ratio *= spatial_scale
+
+                #         # preserve flux density
+                #         flux_density_scale = spatial_scale ** 2
+
+                #         # science
+                #         outsci *= area_ratio * flux_density_scale
+
+                #         axs[ax_i, ax_j].imshow((outsci), vmax=0.5, origin="lower")
+                #         # axs[ax_i, ax_j].imshow((outdir), vmax=0.0012, origin="lower")
+                #         # plt.show()
+                #         # plt.imshow(np.sqrt(outdir), origin="lower")
+                # plt.show()
+
+                # print("PSCALE", new_beam.grism.wcs.pscale)
+
+                new_beam = deepcopy(self.beams[beam_idxs[0]])
+                # print(dir(new_beam.direct.wcs))
+                # print(new_beam.direct.wcs)
+                # print(new_beam.grism.wcs)
+
+                # Set centre of direct image to the actual coordinates
+                direct_cen = (np.asarray(new_beam.direct.data["REF"].shape) + 1) / 2
+                print (f"{direct_cen=}")
+
+                shift_crpix = (
+                    # (np.asarray(new_beam.direct.data["REF"].shape) + 1) / 2
+                    direct_cen
+                    - np.array(
+                        new_beam.direct.wcs.all_world2pix(
+                            [[self.ra, self.dec]],
+                            1,
+                            # [test_beam.grism.wcs.wcs.crpix], 1
+                        ).flatten()
+                    )
+                    # -1
+                )
+
+                # # print(cen)
+                # new_beam.direct.wcs.wcs.crpix = direct_cen
+                # new_beam.direct.wcs.wcs.crval = [self.ra, self.dec]
+
+                # Align beam to direct
+                # direct_cen = (np.asarray(new_beam.direct.data["REF"].shape)+1) / 2
+                # print(cen)
+                print("SHIFT", shift_crpix)
+
+                print(new_beam.grism.wcs.wcs.crval)
+                print(self.ra, self.dec)
+
+                new_beam.grism.wcs = grizli_utils.transform_wcs(
+                    new_beam.grism.wcs, translation=shift_crpix
+                )
+                new_beam.direct.wcs = grizli_utils.transform_wcs(
+                    new_beam.direct.wcs, translation=shift_crpix
+                )
+
+                # print (new_beam.grism.wcs.wcs.crval)
+                # print (self.ra, self.dec)
+                # exit()
+
+                sh = new_beam.sh
+                outsci = np.zeros(sh, dtype=np.float32)
+                outwht = np.zeros(sh, dtype=np.float32)
+                outctx = np.zeros(sh, dtype=np.int32)
+
+                outvar = np.zeros(sh, dtype=np.float32)
+                outwv = np.zeros(sh, dtype=np.float32)
+                outcv = np.zeros(sh, dtype=np.int32)
+
+                outcon = np.zeros(sh, dtype=np.float32)
+                outwc = np.zeros(sh, dtype=np.float32)
+                outcc = np.zeros(sh, dtype=np.int32)
+
+                outdir = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
+                outwd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
+                outcd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.int32)
+
+                grism_data = [self.beams[i].grism.data["SCI"] for i in beam_idxs]
+                direct_data = [self.beams[i].beam.direct for i in beam_idxs]
+                # print ("SEG", new_beam.beam.seg)
+
+                new_seg = grizli_utils.blot_nearest_exact(
+                    new_beam.beam.seg,
+                    self.beams[beam_idxs[0]].direct.wcs,
+                    new_beam.direct.wcs,
+                    verbose=False,
+                    stepsize=-1,
+                    scale_by_pixel_area=False,
+                )
+
+                for i, idx in enumerate(beam_idxs):
+
+                    beam = self.beams[idx]
+                    direct_wcs_i = beam.direct.wcs
+                    grism_wcs_i = beam.grism.wcs.copy()
+
+                    # grism_wcs_i.wcs.crpix = [
+                    #     grism_wcs_i.wcs.crpix[0] - beam.beam.xcenter,
+                    #     grism_wcs_i.wcs.crpix[1] - beam.beam.ycenter,
+                    # ]
+                    # grism_wcs_i.wcs.crpix = [
+                    #     grism_wcs_i.wcs.crpix[0],
+                    #     grism_wcs_i.wcs.crpix[1],
+                    # ]
+                    # plt.imshow(beam.ivar)
+                    # plt.show()
+                    # grism_wht = beam.ivar
+                    contam_weight = np.exp(
+                        -(self.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
+                    )
+                    grism_wht = beam.ivar * contam_weight
+                    grism_wht[~np.isfinite(grism_wht)] = 0.0
+                    contam_wht = beam.ivar
+                    contam_wht[~np.isfinite(contam_wht)] = 0.0
+                    # wht_mask = grism_wht == 0
+                    # med_wht = np.median(grism_wht[~wht_mask])
+                    # grism_wht[wht_mask] = med_wht
+
+                    drizzler(
+                        direct_data[i],
+                        direct_wcs_i,
+                        np.ones_like(direct_data[i]),
+                        new_beam.direct.wcs,
+                        outdir,
+                        outwd,
+                        outcd,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                    )
+                    drizzler(
+                        grism_data[i],
+                        # beam.grism.wcs,
+                        grism_wcs_i,
+                        grism_wht,
+                        # np.ones_like(grism_data[i]),
+                        new_beam.grism.wcs,
+                        outsci,
+                        outwht,
+                        outctx,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                    )
+                    drizzler(
+                        beam.contam,
+                        # beam.grism.wcs,
+                        grism_wcs_i,
+                        contam_wht,
+                        # np.ones_like(grism_data[i]),
+                        new_beam.grism.wcs,
+                        outcon,
+                        outwc,
+                        outcc,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                    )
+
+                    drizzler(
+                        contam_weight,
+                        grism_wcs_i,
+                        grism_wht,
+                        new_beam.grism.wcs,
+                        outvar,
+                        outwv,
+                        outcv,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                    )
+
+                # print(
+                #     self.id,
+                #     # new_direct
+                #     # new_seg,
+                #     np.nanmedian(
+                #         np.asarray([self.beams[i].direct.origin for i in beam_idxs]),
+                #         axis=0,
+                #     ),
+                #     np.nanmedian(
+                #         np.asarray([self.beams[i].direct.pad for i in beam_idxs]),
+                #         axis=0,
+                #     ),
+                #     self.beams[beam_idxs[0]].beam.beam,
+                #     self.beams[beam_idxs[0]].beam.conf,
+                #     0,
+                #     0,
+                #     self.beams[beam_idxs[0]].beam.fwcpos,
+                #     self.beams[beam_idxs[0]].beam.MW_EBV,
+                #     0.0,
+                #     0.0,
+                # )
+
+                # # data_list = [self.beams[i].grism.data["SCI"] for i in beam_idxs]
+                # # wcs_list = [self.beams[i].grism.wcs for i in beam_idxs]
+                # data_list = [self.beams[i].direct.data["REF"] for i in beam_idxs]
+                # wcs_list = [self.beams[i].direct.wcs for i in beam_idxs]
+                # shape_list = [d.shape for d in data_list]
+                # print([self.beams[i].direct.pad for i in beam_idxs])
+
+                # stack_wcs, stack_shape = find_optimal_celestial_wcs(
+                #     [*zip(shape_list, wcs_list)]
+                # )
+                # array, footprint = reproject_and_coadd(
+                #     [*zip(data_list, wcs_list)],
+                #     #    stack_wcs,
+                #     new_beam.direct.wcs,
+                #     shape_out=new_beam.direct.data["REF"].shape,
+                #     reproject_function=reproject_adaptive,
+                # )
+                # # plt.imshow(np.sqrt(array))
+                # # plt.show()
+
+                # Correct for drizzle scaling
+                area_ratio = 1.0 / new_beam.grism.wcs.pscale**2
+
+                # Preserve flux (has to preserve aperture flux along spatial axis but
+                # average in spectral axis).
+                # area_ratio *= spatial_scale
+
+                # preserve flux density
+                flux_density_scale = spatial_scale**2
+
+                # science
+                outsci *= area_ratio * flux_density_scale
+                # Direct
+                outdir *= area_ratio * flux_density_scale
+                # Variance
+                outvar *= area_ratio / outwv * flux_density_scale**2
+                outwht = 1 / outvar
+                outwht[(outvar == 0) | (~np.isfinite(outwht))] = 0
+                # Contam
+                outcon *= area_ratio * flux_density_scale
+
+                new_beam.grism.data["SCI"] = outsci
+                new_beam.grism.data["ERR"] = np.sqrt(outvar)
+                new_beam.grism.data["DQ"] = np.zeros_like(outsci)
+                new_beam.contam = outcon
+                new_beam.direct.data["REF"] = outdir
+
+                # flam_scale = np.nanmedian(new_beam.direct.data["REF"]/new_beam.beam.direct)
+                # print (f"{flam_scale=}")
+                # fig, axs = plt.subplots(1,3, sharex=True,sharey=True)
+                # axs[0].imshow(np.log10(new_beam.beam.direct))
+                # axs[1].imshow(np.log10(outdir))
+                # axs[2].imshow(np.log10(new_beam.direct.data["REF"]))
+                # # axs[2].imshow(new_beam.beam.direct-outdir)
+                # plt.show()
+                # return
+
+                new_beam.beam = GrismDisperser(
+                    id=self.id,
+                    direct=outdir,
+                    segmentation=new_seg,
+                    origin=np.nanmedian(
+                        np.asarray([self.beams[i].direct.origin for i in beam_idxs]),
+                        axis=0,
+                    ),
+                    pad=np.nanmedian(
+                        np.asarray([self.beams[i].direct.pad for i in beam_idxs]),
+                        axis=0,
+                    ),
+                    grow=np.nanmedian(
+                        np.asarray([self.beams[i].direct.grow for i in beam_idxs]),
+                        axis=0,
+                    ),
+                    beam=self.beams[beam_idxs[0]].beam.beam,
+                    xcenter=0,
+                    ycenter=0,
+                    conf=self.beams[beam_idxs[0]].beam.conf,
+                    fwcpos=self.beams[beam_idxs[0]].beam.fwcpos,
+                    MW_EBV=self.beams[beam_idxs[0]].beam.MW_EBV,
+                    xoffset=0.0,
+                    yoffset=0.0,
+                )
+                # print(f"{self.min_sens=}")
+                new_beam._parse_from_data(
+                    isJWST=True,
+                    contam_sn_mask=[10, 3],
+                    min_mask=self.min_mask,
+                    min_sens=self.min_sens,
+                    mask_resid=self.mask_resid,
+                )
+                new_beam.compute_model()
+
+                # fig, axs = plt.subplots(4, 1, sharex=True, sharey=True)
+                # axs[0].imshow(np.sqrt(new_beam.grism.data["SCI"]), origin="lower")
+                # axs[2].imshow(np.sqrt(new_beam.model), origin="lower")
+                # axs[1].imshow(np.sqrt(outsci-outcon), origin="lower")
+                # axs[3].imshow(np.sqrt(np.sqrt(outvar)))
+                # # axs
+                # # scale = np.nansum(new_beam.model)/np.nansum(outsci)
+                # # scale *= 5
+                # # axs[3].imshow(np.sqrt(np.sqrt(outvar)))
+                # # axs[2].imshow(new_beam.grism.data["DQ"], origin="lower")
+                # # axs[2].imshow(new_beam.ivar, origin="lower")
+                # # axs[3].imshow(new_beam.contam, origin="lower")
+                # # axs[3].imshow(outsci - new_beam.model/scale, origin="lower")
+                # # axs[0].imshow(new_beam.beam.direct)
+                # # axs[1].imshow(self.beams[beam_idxs[0]].beam.direct)
+                # plt.show()
+
+                # print(new_beam.model)
+
+                # return
+                new_multibeam.append(new_beam)
+                if filt=="F115W":
+                    if float(pa)==341.0:
+                        test_dir[0]= outdir
+                    else:
+                        test_dir[1]= outdir
+            
+        # fig, axs = plt.subplots(1,3,sharex=True,sharey=True)
+        # axs[0].imshow(test_dir[0])
+        # axs[1].imshow(np.rot90(test_dir[1], k=3))
+        # axs[2].imshow(test_dir[0]-np.rot90(test_dir[1],k=3))
+        # print (test_dir[0].shape, new_multibeam[0].direct.wcs)
+        # plt.show()
+        # exit()
+
+
+        return new_multibeam
+
     def fit_at_z(
         self,
         z: float = 0.0,
@@ -616,6 +1182,9 @@ class RegionsMultiBeam(MultiBeam):
         save_lines: bool = True,
         save_stacks: bool = True,
         pline: dict = DEFAULT_PLINE,
+        nnls_iters: int = 100,
+        seed: int = 2744,
+        nnls_method: str = "scipy",
         **grizli_kwargs,
     ):
         """
@@ -713,11 +1282,36 @@ class RegionsMultiBeam(MultiBeam):
         except:
             HAS_SKLEARN = False
 
+        try:
+            import adelie
+
+            HAS_ADELIE = True
+        except:
+            HAS_ADELIE = False
+
         import numpy.linalg
         import scipy.optimize
+        # from scipy.optimize import _cython_nnls
+        # from scipy.optimize import _nnls
+        # print (dir(_nnls))
+        # exit()
 
         if spec_wavs is None:
             spec_wavs = np.arange(10000.0, 23000.0, 45.0)
+
+        if fit_stacks:
+            new_beams = self._gen_stacked_beams()
+            mb_obj = MultiBeam(
+                new_beams,
+                group_name=self.group_name,
+                fcontam=self.fcontam,
+                min_mask=self.min_mask,
+                min_sens=self.min_sens,
+                mask_resid=self.mask_resid,
+            )
+            mb_obj.fit_trace_shift()
+        else:
+            mb_obj = self
 
         # print(self.group_name, self.id)
         if memmap:
@@ -726,17 +1320,17 @@ class RegionsMultiBeam(MultiBeam):
             temp_dir.mkdir(exist_ok=True, parents=True)
 
         # print 'xxx Init poly'
-        self.init_poly_coeffs(poly_order=poly_order)
+        mb_obj.init_poly_coeffs(poly_order=poly_order)
 
         # print 'xxx Init bg'
         if fit_background:
             self.fit_bg = True
-            A = np.vstack((self.A_bg, self.A_poly))
+            A = np.vstack((mb_obj.A_bg, mb_obj.A_poly))
         else:
             self.fit_bg = False
-            A = self.A_poly * 1
+            A = mb_obj.A_poly * 1
 
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(seed=seed)
 
         with h5py.File(
             self.pipes_dir
@@ -762,6 +1356,9 @@ class RegionsMultiBeam(MultiBeam):
                 temp_dir = Path.cwd()
             temp_dir.mkdir(exist_ok=True, parents=True)
 
+        # print("Exiting code now")
+        # exit()
+
         # with SharedMemoryManager() as smm:
         smm = SharedMemoryManager()
         smm.start()
@@ -770,9 +1367,9 @@ class RegionsMultiBeam(MultiBeam):
         # large arrays
         oversamp_seg_maps_shape = (
             self.n_regions,
-            self.N,
-            self.beams[0].beam.sh[0],
-            self.beams[0].beam.sh[1],
+            mb_obj.N,
+            mb_obj.beams[0].beam.sh[0],
+            mb_obj.beams[0].beam.sh[1],
         )
         if memmap:
             oversamp_seg_maps = np.memmap(
@@ -796,8 +1393,8 @@ class RegionsMultiBeam(MultiBeam):
         start_idx = 0
 
         oversampled_shape = (
-            oversamp_factor * self.beams[0].beam.sh[0],
-            oversamp_factor * self.beams[0].beam.sh[1],
+            oversamp_factor * mb_obj.beams[0].beam.sh[0],
+            oversamp_factor * mb_obj.beams[0].beam.sh[1],
         )
         # print (np.prod(oversampled_shape))
         # exit()
@@ -820,7 +1417,9 @@ class RegionsMultiBeam(MultiBeam):
         oversampled.fill(np.nan)
 
         start_idx = 0
-        for i, (beam_cutout, cutout_shape) in enumerate(zip(self.beams, self.Nflat)):
+        for i, (beam_cutout, cutout_shape) in enumerate(
+            zip(mb_obj.beams, mb_obj.Nflat)
+        ):
             beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
             if not beam_name in beam_info:
                 beam_info[beam_name] = {}
@@ -878,7 +1477,7 @@ class RegionsMultiBeam(MultiBeam):
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
         stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
-        temp_offset = A.shape[0] - self.N + num_stacks
+        temp_offset = A.shape[0] - mb_obj.N + num_stacks
 
         stacked_A_shape = (temp_offset + NTEMP, stacked_shape)
 
@@ -931,7 +1530,7 @@ class RegionsMultiBeam(MultiBeam):
             # )/np.nansum(
             #     (self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
             # )
-            _scif = self.scif[stack_idxs]
+            _scif = mb_obj.scif[stack_idxs]
             # _scif[~self.fit_mask[stack_idxs]] = np.nan
             stacked_scif[start_idx : start_idx + np.prod(v["2d_shape"])] = np.nanmedian(
                 # (self.scif[stack_idxs]),
@@ -940,29 +1539,29 @@ class RegionsMultiBeam(MultiBeam):
             )
             stacked_weightf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
                 np.nanmedian(
-                    self.weightf[stack_idxs],
+                    mb_obj.weightf[stack_idxs],
                     axis=0,
                 )
             )
             stacked_fit_mask[start_idx : start_idx + np.prod(v["2d_shape"])] = np.any(
-                self.fit_mask[stack_idxs],
+                mb_obj.fit_mask[stack_idxs],
                 axis=0,
                 # dtype=bool
             )
             if fit_background:
                 stacked_A[k_i, start_idx : start_idx + np.prod(v["2d_shape"])] = 1.0
                 stacked_A[
-                    num_stacks : num_stacks + self.A_poly.shape[0],
+                    num_stacks : num_stacks + mb_obj.A_poly.shape[0],
                     start_idx : start_idx + np.prod(v["2d_shape"]),
-                ] = np.nanmean(self.A_poly[:, stack_idxs], axis=1)
+                ] = np.nanmean(mb_obj.A_poly[:, stack_idxs], axis=1)
             else:
                 stacked_A[
-                    num_stacks : num_stacks + self.A_poly.shape[0],
+                    num_stacks : num_stacks + mb_obj.A_poly.shape[0],
                     start_idx : start_idx + np.prod(v["2d_shape"]),
-                ] = np.nanmean(self.A_poly[:, stack_idxs], axis=1)
+                ] = np.nanmean(mb_obj.A_poly[:, stack_idxs], axis=1)
 
             stacked_ivarf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
-                np.nanmedian(self.ivarf[stack_idxs], axis=0)
+                np.nanmedian(mb_obj.ivarf[stack_idxs], axis=0)
             )
 
             start_idx += np.prod(v["2d_shape"])
@@ -1018,11 +1617,17 @@ class RegionsMultiBeam(MultiBeam):
 
             output_table.write(output_table_path, overwrite=True, format="pandas.csv")
 
-            iterations = np.arange(num_iters)
+            iterations = np.arange(num_iters)+1
             for iteration in iterations:
-                rows = rng.choice(
-                    np.arange(n_post_samples, dtype=int), size=n_samples, replace=False
-                )
+                if iteration==iterations[-1]:
+
+                    best_iter = np.argmin(output_table["chi2"])
+
+                    rows = [int(s) for s in output_table["rows"][best_iter].split(";")]
+                else:
+                    rows = rng.choice(
+                        np.arange(n_post_samples, dtype=int), size=n_samples, replace=False
+                    )
                 print(f"Iteration {iteration}, {rows=}")
 
                 print("Generating models...")
@@ -1032,7 +1637,7 @@ class RegionsMultiBeam(MultiBeam):
                     initargs=(
                         fit_instructions,
                         veldisp,
-                        self.beams,
+                        mb_obj.beams,
                     ),
                 ) as pool:
                     for s_i, s in enumerate(self.regions_seg_ids):
@@ -1046,7 +1651,6 @@ class RegionsMultiBeam(MultiBeam):
 
                 print("Generating models... DONE")
                 ok_temp = np.sum(stacked_A, axis=1) > 0
-                # from time import time
 
                 stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
                 # np.unique() finds identical items in a raveled array. To make it
@@ -1078,25 +1682,68 @@ class RegionsMultiBeam(MultiBeam):
                 )
                 print("NNLS fitting...")
 
+                t0 = time()
+
                 if fit_background:
+                    # Proof of concept, this can be improved with a 
+                    # proper nnls_kwargs dict, and passing tolerance/iters
+                    # as a double-valued list
+                    if iteration==iterations[-1]:
+                        nnls_iters = 1e5
+                        nnls_tol = 1e-10
+                    else:
+                        nnls_tol = 1e-6
+                    
                     y = stacked_scif[stacked_fit_mask] + off
                     y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
-                    nnls_solver = CDNNLS(stacked_Ax, y + off)
-                    # nnls_solver._run(stacked_Ax.shape[1]*3)
-                    nnls_solver.run(n_iter=100)
-                    coeffs = nnls_solver.w
-                    coeffs[:num_stacks] -= off
+
+                    if nnls_method == "scipy":
+
+                        coeffs, rnorm, info = scipy.optimize._nnls._nnls(
+                            stacked_Ax, y + off, nnls_iters
+                        )
+                        # coeffs, rnorm, info = _cython_nnls._nnls(
+                        #     stacked_Ax, y + off, nnls_iters
+                        # )
+                        coeffs[:num_stacks] -= off
+
+                    elif nnls_method == "numba":
+
+                        nnls_solver = CDNNLS(stacked_Ax, y + off)
+                        # nnls_solver._run(stacked_Ax.shape[1]*3)
+                        nnls_solver.run(n_iter=nnls_iters)
+                        coeffs = nnls_solver.w
+                        coeffs[:num_stacks] -= off
+
+                    elif nnls_method == "adelie" and HAS_ADELIE:
+                        state = adelie.solver.bvls(
+                            stacked_Ax,
+                            y + off,
+                            lower=np.zeros(stacked_Ax.shape[-1]),
+                            upper=np.full(stacked_Ax.shape[-1], np.inf),
+                            max_iters=int(nnls_iters),
+                            tol=nnls_tol
+                            # n_threads=20 # Inter-thread communication is actually slower
+                        )
+                        state.solve()
+                        print (state.iters)
+                        coeffs = state.beta
+                        coeffs[:num_stacks] -= off
+
+
                 else:
-                    y = self.scif[self.fit_mask]
-                    y *= np.sqrt(self.ivarf[self.fit_mask])
+                    y = mb_obj.scif[mb_obj.fit_mask]
+                    y *= np.sqrt(mb_obj.ivarf[mb_obj.fit_mask])
 
                     coeffs, rnorm = scipy.optimize.nnls(Ax, y)
 
-                    Ax = A[:, self.fit_mask][ok_temp, :].T
+                    Ax = A[:, mb_obj.fit_mask][ok_temp, :].T
                     # Weight by ivar
-                    Ax *= np.sqrt(self.ivarf[self.fit_mask][:, np.newaxis])
+                    Ax *= np.sqrt(mb_obj.ivarf[mb_obj.fit_mask][:, np.newaxis])
 
                 print("NNLS fitting... DONE")
+                print(f"Time taken {time()-t0}s")
+
                 out_coeffs[ok_temp] = coeffs
                 stacked_modelf = np.dot(out_coeffs, stacked_A)
                 chi2 = np.nansum(
@@ -1131,7 +1778,7 @@ class RegionsMultiBeam(MultiBeam):
         if fit_background:
             for k_i, (k, v) in enumerate(beam_info.items()):
                 for ib in v["list_idx"]:
-                    self.beams[ib].background = out_coeffs[k_i]
+                    mb_obj.beams[ib].background = out_coeffs[k_i]
 
         best_rows = [int(s) for s in output_table["rows"][best_iter].split(";")]
 
@@ -1144,7 +1791,7 @@ class RegionsMultiBeam(MultiBeam):
                 initargs=(
                     fit_instructions,
                     veldisp,
-                    self.beams,
+                    mb_obj.beams,
                 ),
             ) as pool:
                 for s_i, s in enumerate(self.regions_seg_ids):
@@ -1169,7 +1816,7 @@ class RegionsMultiBeam(MultiBeam):
                 initargs=(
                     fit_instructions,
                     veldisp,
-                    self.beams,
+                    mb_obj.beams,
                 ),
             ) as pool:
                 for s_i, s in enumerate(self.regions_seg_ids):
@@ -1226,7 +1873,7 @@ class RegionsMultiBeam(MultiBeam):
                     h.header["GRISM"] = (k.split("_")[0], "Grism")
                     # h.header['ISFLAM'] = (flambda, 'Pixels in f-lam units')
                     h.header["CONF"] = (
-                        self.beams[0].beam.conf.conf_file,
+                        mb_obj.beams[0].beam.conf.conf_file,
                         "Configuration file",
                     )
                 stacked_hdul.extend(hdus)
@@ -1323,7 +1970,7 @@ class RegionsMultiBeam(MultiBeam):
                 with multiprocessing.Pool(
                     processes=cpu_count,
                     initializer=_init_pipes_sampler,
-                    initargs=(fit_instructions, veldisp, self.beams),
+                    initargs=(fit_instructions, veldisp, mb_obj.beams),
                 ) as pool:
                     for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
                         pool.apply_async(
@@ -1339,19 +1986,19 @@ class RegionsMultiBeam(MultiBeam):
                 start_idx = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
                     for ib in v["list_idx"]:
-                        self.beams[ib].beam.model = flat_beam_models[
+                        mb_obj.beams[ib].beam.model = flat_beam_models[
                             i0 : i0 + np.prod(v["2d_shape"])
                         ].reshape(v["2d_shape"])
                         i0 += np.prod(v["2d_shape"])
                     start_idx += np.prod(v["2d_shape"])
 
                 hdu = drizzle_to_wavelength(
-                    self.beams,
+                    mb_obj.beams,
                     ra=self.ra,
                     dec=self.dec,
                     # wave=line_wave_obs,
                     wave=l_v["wave"] * (1 + z),
-                    fcontam=self.fcontam,
+                    fcontam=mb_obj.fcontam,
                     **pline,
                 )
 
@@ -1395,7 +2042,7 @@ class RegionsMultiBeam(MultiBeam):
                 )
 
                 line_wcs = WCS(line_hdu[1].header)
-                segm = self.drizzle_segmentation(wcsobj=line_wcs)
+                segm = mb_obj.drizzle_segmentation(wcsobj=line_wcs)
                 seg_hdu = fits.ImageHDU(data=segm.astype(np.int32), name="SEG")
                 line_hdu.insert(1, seg_hdu)
 
@@ -1407,22 +2054,23 @@ class RegionsMultiBeam(MultiBeam):
 
         smm.shutdown()
 
-        chi2 = np.nansum(
-            (stacked_weightf * (stacked_scif - stacked_modelf) ** 2 * stacked_ivarf)[
-                stacked_fit_mask
-            ]
-        )
+        # chi2 = np.nansum(
+        #     (stacked_weightf * (stacked_scif - stacked_modelf) ** 2 * stacked_ivarf)[
+        #         stacked_fit_mask
+        #     ]
+        # )
 
         if fit_background:
-            poly_coeffs = out_coeffs[num_stacks : num_stacks + self.n_poly]
+            poly_coeffs = out_coeffs[num_stacks : num_stacks + mb_obj.n_poly]
         else:
-            poly_coeffs = out_coeffs[: self.n_poly]
+            poly_coeffs = out_coeffs[: mb_obj.n_poly]
 
         # print(self.n_poly, self.N)
         # print(num_stacks)
         # print(f"{out_coeffs=}")
         # print(poly_coeffs, self.x_poly)
-        self.y_poly = np.dot(poly_coeffs, self.x_poly)
+        mb_obj.y_poly = np.dot(poly_coeffs, mb_obj.x_poly)
         # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
 
-        return A, out_coeffs, chi2, stacked_modelf
+        # return A, out_coeffs, chi2, stacked_modelf
+        return

@@ -14,6 +14,8 @@ from astropy.wcs import WCS
 from numpy.typing import ArrayLike
 from vorbin.voronoi_2d_binning import voronoi_2d_binning
 
+from glass_niriss.sed import colour_binning
+
 __all__ = [
     "hexbin",
     "constrained_adaptive",
@@ -484,7 +486,7 @@ def save_binned_data_fits(
         [
             fits.PrimaryHDU(),
             fits.ImageHDU(
-                data=bin_labels,
+                data=bin_labels.astype(float),
                 header=header,
                 name="SEG_MAP",
             ),
@@ -502,7 +504,7 @@ def bin_and_save(
     info_dict: dict,
     sn_filter: str,
     target_sn: float = 100,
-    use_hex: bool = True,
+    bin_scheme: str = "hexbin",
     bin_diameter: float = 4,
     seg_hdu_index: int | str = 0,
     padding: int = 50,
@@ -545,10 +547,12 @@ def bin_and_save(
         guaranteed to be achieved for the hexagonal bins (if using this
         binning scheme), as there is some scatter on the S/N achieved
         through Voronoi binning.
-    use_hex : bool, optional
-        Whether to perform the first stage of the binning procedure. If
-        ``False``, then this will be skipped, and only the Voronoi binning
-        procedure will be attempted. By default ``True``.
+    bin_scheme : str, optional
+        Which binning scheme to use, by default ``"hexbin"``. In this
+        case, the first stage of the binning procedure will be performed.
+        If ``"vorbin"``, then this will be skipped, and only the Voronoi
+        binning procedure will be attempted. If ``"colour"``, then
+        pixels will be aggregated based on their colour.
     bin_diameter : float, optional
         The minimum diameter of each bin (subject to pixel discretisation
         effects), by default 4.
@@ -585,18 +589,30 @@ def bin_and_save(
     # Don't forget that the noise is the square root of the variance array
     noise = np.sqrt(fits.getdata(info_dict[sn_filter]["var"]))[obj_img_idxs]
 
-    bin_labels, nbins, bin_sn, bin_inv = constrained_adaptive(
-        signal=signal,
-        noise=noise,
-        target_sn=target_sn,
-        mask=seg_map[obj_img_idxs] != obj_id,
-        use_hex=use_hex,
-        bin_diameter=bin_diameter,
-        **bin_kwargs,
-    )
+    if bin_scheme == "colour":
+        bin_labels, nbins, bin_sn, bin_inv = colour_binning.colour_aggregate(
+            info_dict=info_dict,
+            signal=signal,
+            noise=noise,
+            target_sn=target_sn,
+            mask=seg_map[obj_img_idxs] != obj_id,
+            crop=obj_img_idxs,
+            **bin_kwargs,
+        )
+    else:
+
+        bin_labels, nbins, bin_sn, bin_inv = constrained_adaptive(
+            signal=signal,
+            noise=noise,
+            target_sn=target_sn,
+            mask=seg_map[obj_img_idxs] != obj_id,
+            use_hex=use_hex,
+            bin_diameter=bin_diameter,
+            **bin_kwargs,
+        )
 
     # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
-    binned_name = f"{obj_id}_{"hexbin" if use_hex else "vorbin"}_{bin_diameter}_{target_sn}_{sn_filter}"
+    binned_name = f"{obj_id}_{bin_scheme}_{bin_diameter}_{target_sn}_{sn_filter}"
 
     save_path = out_dir / f"{binned_name}_data.fits"
     if save_path.is_file() and not overwrite:
