@@ -734,9 +734,11 @@ class AtlasFitter:
             fit_info_str = fit_info_str.replace("float", "np.float")
             print(eval(fit_info_str))
             if eval(fit_info_str) != self.fit_instructions:
-                for i, ii in zip([*eval(fit_info_str).values()], [*self.fit_instructions.values()]):
-                    print (i) 
-                    print (ii)
+                for i, ii in zip(
+                    [*eval(fit_info_str).values()], [*self.fit_instructions.values()]
+                ):
+                    print(i)
+                    print(ii)
                 # print(eval(fit_info_str), self.fit_instructions)
                 raise ValueError("Fit instructions do not match.")
 

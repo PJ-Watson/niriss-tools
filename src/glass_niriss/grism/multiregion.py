@@ -12,6 +12,7 @@ from multiprocessing import Manager, Pool, cpu_count, shared_memory
 from multiprocessing.managers import SharedMemoryManager
 from os import PathLike
 from pathlib import Path
+from time import time
 
 import bagpipes
 import h5py
@@ -26,16 +27,14 @@ from astropy.nddata import block_reduce
 from astropy.table import Table
 from astropy.wcs import WCS
 from bagpipes import model_galaxy
+from grizli import utils as grizli_utils
+from grizli.model import GrismDisperser
 from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
 from pandas._libs.hashtable import SIZE_HINT_LIMIT, duplicated
 from pandas.core import algorithms
 from pandas.core.sorting import get_group_index
 from reproject import reproject_interp
-from grizli import utils as grizli_utils
-from grizli.model import GrismDisperser
-
-from time import time
 
 from glass_niriss.grism.specgen import (
     CLOUDY_LINE_MAP,
@@ -644,8 +643,8 @@ class RegionsMultiBeam(MultiBeam):
         # plt.show()
 
         from drizzlepac import adrizzle
-        from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
         from reproject import reproject_adaptive
+        from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
 
         adrizzle.log.setLevel("ERROR")
         drizzler = adrizzle.do_driz
@@ -839,7 +838,7 @@ class RegionsMultiBeam(MultiBeam):
 
                 # Set centre of direct image to the actual coordinates
                 direct_cen = (np.asarray(new_beam.direct.data["REF"].shape) + 1) / 2
-                print (f"{direct_cen=}")
+                print(f"{direct_cen=}")
 
                 shift_crpix = (
                     # (np.asarray(new_beam.direct.data["REF"].shape) + 1) / 2
@@ -1144,12 +1143,12 @@ class RegionsMultiBeam(MultiBeam):
 
                 # return
                 new_multibeam.append(new_beam)
-                if filt=="F115W":
-                    if float(pa)==341.0:
-                        test_dir[0]= outdir
+                if filt == "F115W":
+                    if float(pa) == 341.0:
+                        test_dir[0] = outdir
                     else:
-                        test_dir[1]= outdir
-            
+                        test_dir[1] = outdir
+
         # fig, axs = plt.subplots(1,3,sharex=True,sharey=True)
         # axs[0].imshow(test_dir[0])
         # axs[1].imshow(np.rot90(test_dir[1], k=3))
@@ -1157,7 +1156,6 @@ class RegionsMultiBeam(MultiBeam):
         # print (test_dir[0].shape, new_multibeam[0].direct.wcs)
         # plt.show()
         # exit()
-
 
         return new_multibeam
 
@@ -1167,7 +1165,7 @@ class RegionsMultiBeam(MultiBeam):
         fit_background: bool = True,
         poly_order: int = 0,
         n_samples: int = 3,
-        num_iters: int = 10,
+        n_iters: int = 10,
         spec_wavs: ArrayLike | None = None,
         oversamp_factor: int = 3,
         veldisp: float = 500,
@@ -1182,9 +1180,10 @@ class RegionsMultiBeam(MultiBeam):
         save_lines: bool = True,
         save_stacks: bool = True,
         pline: dict = DEFAULT_PLINE,
-        nnls_iters: int = 100,
         seed: int = 2744,
         nnls_method: str = "scipy",
+        nnls_iters: int = 100,
+        nnls_tol: float = 1e-5,
         **grizli_kwargs,
     ):
         """
@@ -1202,7 +1201,7 @@ class RegionsMultiBeam(MultiBeam):
         n_samples : int, optional
             The number of samples to draw from the joint posterior
             distributions in each region, by default ``3``.
-        num_iters : int, optional
+        n_iters : int, optional
             The number of iterations to perform when fitting, by default
             ``10``.
         spec_wavs : ArrayLike | None, optional
@@ -1264,6 +1263,26 @@ class RegionsMultiBeam(MultiBeam):
         pline : dict, optional
             Parameters for generating the drizzled emission line maps.
             Defaults to `~glass_niriss.grism.DEFAULT_PLINE`.
+        seed : int | None, optional
+            The seed for the random sampling, by default 2744. If None,
+            then a new seed will be generated each time this method is
+            called.
+        nnls_method : str, optional
+            The method to use for finding the best-fit coefficients for
+            the set of templates. Must be one of "scipy", "numba", or
+            "adelie" (ordered in increasing speed). By default, "scipy"
+            will be used.
+        nnls_iters : int or ArrayLike, optional
+            The maximum number of iterations to attempt if the NNLS
+            solution has not converged to the specified tolerance. If more
+            than one value is passed, a two-stage fit will be run, whereby
+            the best-fit solution from the first ``n_iters`` attempts will
+            be re-fit with ``nnls_iters[0]`` iterations. This is only
+            relevant if ``nnls_method != "scipy"``.
+        nnls_tol : float or ArrayLike, optional
+            The desired tolerance for the NNLS solver. As with
+            ``nnls_iters``, the second value can be used to perform a more
+            precise fit after the initial ``n_iters`` attempts.
         **grizli_kwargs : dict, optional
             A catch-all for previous `grizli` keywords. These are
             redundant in the multiregion method, and are kept only to
@@ -1275,12 +1294,6 @@ class RegionsMultiBeam(MultiBeam):
         tuple
             Exact form of return still WIP.
         """
-        try:
-            import sklearn.linear_model
-
-            HAS_SKLEARN = True
-        except:
-            HAS_SKLEARN = False
 
         try:
             import adelie
@@ -1291,10 +1304,10 @@ class RegionsMultiBeam(MultiBeam):
 
         import numpy.linalg
         import scipy.optimize
-        # from scipy.optimize import _cython_nnls
-        # from scipy.optimize import _nnls
-        # print (dir(_nnls))
-        # exit()
+
+        nnls_iters = np.atleast_1d(nnls_iters).astype(int)
+        nnls_tol = np.atleast_1d(nnls_tol)
+        TWO_STAGE = (len(nnls_iters) > 1) | (len(nnls_tol) > 1)
 
         if spec_wavs is None:
             spec_wavs = np.arange(10000.0, 23000.0, 45.0)
@@ -1313,16 +1326,13 @@ class RegionsMultiBeam(MultiBeam):
         else:
             mb_obj = self
 
-        # print(self.group_name, self.id)
         if memmap:
             if temp_dir is None:
                 temp_dir = Path.cwd()
             temp_dir.mkdir(exist_ok=True, parents=True)
 
-        # print 'xxx Init poly'
         mb_obj.init_poly_coeffs(poly_order=poly_order)
 
-        # print 'xxx Init bg'
         if fit_background:
             self.fit_bg = True
             A = np.vstack((mb_obj.A_bg, mb_obj.A_poly))
@@ -1356,10 +1366,6 @@ class RegionsMultiBeam(MultiBeam):
                 temp_dir = Path.cwd()
             temp_dir.mkdir(exist_ok=True, parents=True)
 
-        # print("Exiting code now")
-        # exit()
-
-        # with SharedMemoryManager() as smm:
         smm = SharedMemoryManager()
         smm.start()
 
@@ -1396,8 +1402,7 @@ class RegionsMultiBeam(MultiBeam):
             oversamp_factor * mb_obj.beams[0].beam.sh[0],
             oversamp_factor * mb_obj.beams[0].beam.sh[1],
         )
-        # print (np.prod(oversampled_shape))
-        # exit()
+
         if memmap:
             oversampled = np.memmap(
                 temp_dir / "memmap_oversampled.dat",
@@ -1443,7 +1448,7 @@ class RegionsMultiBeam(MultiBeam):
                 return_footprint=False,
                 order=0,
             )
-            # print (test.dtype)
+
             with Pool(processes=cpu_count) as pool:
                 multi_fn = partial(
                     self._reduce_seg_map,
@@ -1465,14 +1470,7 @@ class RegionsMultiBeam(MultiBeam):
                 )
                 pool.starmap(multi_fn, enumerate(self.regions_seg_ids))
 
-        # print(np.nansum(oversamp_seg_maps))
-
         oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
-
-        # print(np.nansum(oversamp_seg_maps))
-
-        # plt.imshow(oversamp_seg_maps[0, 0])
-        # plt.show()
 
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
@@ -1498,16 +1496,8 @@ class RegionsMultiBeam(MultiBeam):
                 buffer=shm_stacked_A.buf,
             )
 
-        print("MEMMAP", memmap)
+        print(f"{MEMMAP=}")
 
-        # shm_stacked_A = smm.SharedMemory(
-        #     size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
-        # )
-        # stacked_A = np.ndarray(
-        #     stacked_A_shape,
-        #     dtype=float,
-        #     buffer=shm_stacked_A.buf,
-        # )
         stacked_A.fill(0.0)
 
         print(stacked_A.shape, stacked_A_shape)
@@ -1525,15 +1515,9 @@ class RegionsMultiBeam(MultiBeam):
         start_idx = 0
         for k_i, (k, v) in enumerate(beam_info.items()):
             stack_idxs = np.r_["0,2", *v["flat_slice"]]
-            # stacked_scif[start_idx:start_idx+np.prod(v["2d_shape"])] = np.nansum(
-            #     ((self.scif[stack_idxs])*self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
-            # )/np.nansum(
-            #     (self.ivarf[stack_idxs])*self.fit_mask[stack_idxs], axis=0
-            # )
+
             _scif = mb_obj.scif[stack_idxs]
-            # _scif[~self.fit_mask[stack_idxs]] = np.nan
             stacked_scif[start_idx : start_idx + np.prod(v["2d_shape"])] = np.nanmedian(
-                # (self.scif[stack_idxs]),
                 _scif,
                 axis=0,
             )
@@ -1546,7 +1530,6 @@ class RegionsMultiBeam(MultiBeam):
             stacked_fit_mask[start_idx : start_idx + np.prod(v["2d_shape"])] = np.any(
                 mb_obj.fit_mask[stack_idxs],
                 axis=0,
-                # dtype=bool
             )
             if fit_background:
                 stacked_A[k_i, start_idx : start_idx + np.prod(v["2d_shape"])] = 1.0
@@ -1595,14 +1578,10 @@ class RegionsMultiBeam(MultiBeam):
                 else shm_seg_maps.name
             ),
             seg_maps_shape=oversamp_seg_maps_shape,
-            # shared_seg_name=shm_seg_maps.name,
-            # seg_maps_shape=oversamp_seg_maps_shape,
             shared_models_name=(
                 temp_dir / "memmap_stacked_A.dat" if memmap else shm_stacked_A.name
             ),
             models_shape=stacked_A_shape,
-            # shared_models_name= shm_stacked_A.name,
-            # models_shape=stacked_A_shape,
             posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
             n_samples=n_samples,
             spec_wavs=spec_wavs,
@@ -1616,17 +1595,18 @@ class RegionsMultiBeam(MultiBeam):
         if (not output_table_path.is_file()) or (overwrite):
 
             output_table.write(output_table_path, overwrite=True, format="pandas.csv")
-
-            iterations = np.arange(num_iters)+1
+            iterations = np.arange(num_iters + int(TWO_STAGE))
             for iteration in iterations:
-                if iteration==iterations[-1]:
+                if TWO_STAGE and (iteration == iterations[-1]):
 
                     best_iter = np.argmin(output_table["chi2"])
 
                     rows = [int(s) for s in output_table["rows"][best_iter].split(";")]
                 else:
                     rows = rng.choice(
-                        np.arange(n_post_samples, dtype=int), size=n_samples, replace=False
+                        np.arange(n_post_samples, dtype=int),
+                        size=n_samples,
+                        replace=False,
                     )
                 print(f"Iteration {iteration}, {rows=}")
 
@@ -1663,17 +1643,12 @@ class RegionsMultiBeam(MultiBeam):
                 unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
                 del stacked_A_contig
 
-                # print (np.nansum(ok_temp), np.nansum(unique_temp), np.nansum(stacked_fit_mask&np.isfinite(stacked_scif)))
-
                 ok_temp &= unique_temp
 
                 out_coeffs = np.zeros(stacked_A.shape[0])
-                # stacked_fit_mask &= np.isfinite(stacked_scif)
+
                 stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
-                # print(stacked_A[:, stacked_fit_mask].base.shape)
-                # print (stacked_A[:, stacked_fit_mask][ok_temp, :].base.shape) is a copy
-                # print(stacked_A[:, stacked_fit_mask][ok_temp, :].T.base.shape)
-                # Weight by ivar
+
                 stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
                 print(
                     f"Array size reduced from {stacked_A.shape} to "
@@ -1684,62 +1659,52 @@ class RegionsMultiBeam(MultiBeam):
 
                 t0 = time()
 
-                if fit_background:
-                    # Proof of concept, this can be improved with a 
-                    # proper nnls_kwargs dict, and passing tolerance/iters
-                    # as a double-valued list
-                    if iteration==iterations[-1]:
-                        nnls_iters = 1e5
-                        nnls_tol = 1e-10
-                    else:
-                        nnls_tol = 1e-6
-                    
-                    y = stacked_scif[stacked_fit_mask] + off
-                    y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
-
-                    if nnls_method == "scipy":
-
-                        coeffs, rnorm, info = scipy.optimize._nnls._nnls(
-                            stacked_Ax, y + off, nnls_iters
-                        )
-                        # coeffs, rnorm, info = _cython_nnls._nnls(
-                        #     stacked_Ax, y + off, nnls_iters
-                        # )
-                        coeffs[:num_stacks] -= off
-
-                    elif nnls_method == "numba":
-
-                        nnls_solver = CDNNLS(stacked_Ax, y + off)
-                        # nnls_solver._run(stacked_Ax.shape[1]*3)
-                        nnls_solver.run(n_iter=nnls_iters)
-                        coeffs = nnls_solver.w
-                        coeffs[:num_stacks] -= off
-
-                    elif nnls_method == "adelie" and HAS_ADELIE:
-                        state = adelie.solver.bvls(
-                            stacked_Ax,
-                            y + off,
-                            lower=np.zeros(stacked_Ax.shape[-1]),
-                            upper=np.full(stacked_Ax.shape[-1], np.inf),
-                            max_iters=int(nnls_iters),
-                            tol=nnls_tol
-                            # n_threads=20 # Inter-thread communication is actually slower
-                        )
-                        state.solve()
-                        print (state.iters)
-                        coeffs = state.beta
-                        coeffs[:num_stacks] -= off
-
-
+                # Proof of concept, this can be improved with a
+                # proper nnls_kwargs dict, and passing tolerance/iters
+                # as a double-valued list
+                if TWO_STAGE and (iteration == iterations[-1]):
+                    print("Final iteration")
+                    _nnls_i = nnls_iters[1]
+                    _nnls_t = nnls_tol[1]
                 else:
-                    y = mb_obj.scif[mb_obj.fit_mask]
-                    y *= np.sqrt(mb_obj.ivarf[mb_obj.fit_mask])
+                    _nnls_i = nnls_iters[0]
+                    _nnls_t = nnls_tol[0]
+                print(_nnls_i, _nnls_t)
 
-                    coeffs, rnorm = scipy.optimize.nnls(Ax, y)
+                y = stacked_scif[stacked_fit_mask] + off
+                y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
 
-                    Ax = A[:, mb_obj.fit_mask][ok_temp, :].T
-                    # Weight by ivar
-                    Ax *= np.sqrt(mb_obj.ivarf[mb_obj.fit_mask][:, np.newaxis])
+                if nnls_method == "scipy":
+
+                    coeffs, rnorm, info = scipy.optimize._nnls._nnls(
+                        stacked_Ax, y + off, _nnls_i
+                    )
+                    # coeffs, rnorm, info = _cython_nnls._nnls(
+                    #     stacked_Ax, y + off, nnls_iters
+                    # )
+                    coeffs[:num_stacks] -= off
+
+                elif nnls_method == "numba":
+
+                    nnls_solver = CDNNLS(stacked_Ax, y + off)
+                    # nnls_solver._run(stacked_Ax.shape[1]*3)
+                    nnls_solver.run(n_iter=_nnls_i, epsilon=_nnls_t)
+                    coeffs = nnls_solver.w
+                    coeffs[:num_stacks] -= off
+
+                elif nnls_method == "adelie" and HAS_ADELIE:
+                    state = adelie.solver.bvls(
+                        stacked_Ax,
+                        y + off,
+                        lower=np.zeros(stacked_Ax.shape[-1]),
+                        upper=np.full(stacked_Ax.shape[-1], np.inf),
+                        max_iters=_nnls_i,
+                        tol=_nnls_t,
+                        # n_threads=20 # Inter-thread communication is actually slower
+                    )
+                    state.solve()
+                    coeffs = state.beta
+                    coeffs[:num_stacks] -= off
 
                 print("NNLS fitting... DONE")
                 print(f"Time taken {time()-t0}s")
