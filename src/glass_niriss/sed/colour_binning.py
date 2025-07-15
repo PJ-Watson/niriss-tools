@@ -89,7 +89,7 @@ def colour_aggregate(
     orig_images = []
     for k, v in info_dict.items():
         orig_images.append(fits.getdata(v["sci"])[crop])
-    f_orig_images = np.array(orig_images).reshape(len(orig_images), 2, -1)
+    f_orig_images = np.array(orig_images).reshape(len(orig_images), -1)
 
     all_colours = permute_axes_subtract(f_orig_images)
     f_colours = all_colours[np.triu_indices(all_colours.shape[0], k=1)]

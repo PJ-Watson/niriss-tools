@@ -1,5 +1,5 @@
 """
-Functions and classing related to multi-region grism fitting.
+Functions and classes related to multi-region grism fitting.
 """
 
 import multiprocessing
@@ -18,9 +18,6 @@ import bagpipes
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-
-# import fnnlsEigen as fe
-# from matrix_free_nnls import solve_nnls
 import pandas
 from astropy.io import fits
 from astropy.nddata import block_reduce
@@ -36,6 +33,7 @@ from pandas.core import algorithms
 from pandas.core.sorting import get_group_index
 from reproject import reproject_interp
 
+from glass_niriss.grism.fitting_tools import CDNNLS
 from glass_niriss.grism.specgen import (
     CLOUDY_LINE_MAP,
     BagpipesSampler,
@@ -43,33 +41,10 @@ from glass_niriss.grism.specgen import (
     check_coverage,
 )
 
-# def duplicated_rows(a, keep="first"):
-#     size_hint = min(a.shape[0], SIZE_HINT_LIMIT)
-
-#     def f(vals):
-#         labels, shape = algorithms.factorize(vals, size_hint=size_hint)
-#         return labels.astype("i8", copy=False), len(shape)
-
-#     vals = (col for col in a.T)
-#     labels, shape = map(list, zip(*map(f, vals)))
-
-#     ids = get_group_index(labels, shape, sort=False, xnull=False)
-#     return duplicated(ids, keep)
-
-
-# from glass_niriss.pytntnn import tntnn
-
-__all__ = ["RegionsMultiBeam", "CDNNLS", "DEFAULT_PLINE"]
+__all__ = ["RegionsMultiBeam", "DEFAULT_PLINE"]
 
 pipes_sampler = None
 beams_object = None
-# scaled_seg_maps = None
-
-import numba
-import numpy as np
-from numba import njit
-from numpy.typing import ArrayLike
-from scipy import sparse
 
 DEFAULT_PLINE = {
     "pixscale": 0.06,
@@ -77,246 +52,6 @@ DEFAULT_PLINE = {
     "size": 5,
     "kernel": "lanczos3",
 }
-
-
-class CDNNLS:
-    """
-    Coordinate descent NNLS.
-
-    Parameters
-    ----------
-    X : ArrayLike
-        The coefficient array.
-    y : ArrayLike
-        The RHS vector.
-    """
-
-    def __init__(self, X: ArrayLike, y: ArrayLike):
-        self._set_objective(X, y)
-
-    def _set_objective(self, X, y):
-        # use Fortran order to compute gradient on contiguous columns
-        # self.X, self.y = np.asfortranarray(X), y
-        self.X, self.y = X, y
-
-        # Make sure we cache the numba compilation.
-        self.run(1)
-
-    def run(
-        self,
-        method: str = "classic",
-        n_iter: int | None = None,
-        epsilon: float = 1e-6,
-        **kwargs,
-    ):
-        """
-        Run a non-negative least squares solver.
-
-        Parameters
-        ----------
-        method : str, optional
-            The method to use, either the default "classic", or "antilop".
-        n_iter : int | None, optional
-            How many iterations to run. If ``None``, then this is set to
-            ``3*X.shape[1]``.
-        epsilon : float, optional
-            The tolerance to use for the stopping condition, by default
-            ``1e-6``.
-        **kwargs : dict, optional
-            Other arguments to pass to the individual methods.
-        """
-
-        if n_iter is None:
-            n_iter = 3 * self.X.shape[1]
-        match method:
-            case "classic":
-                # print("classic")
-                self._run_classic(n_iter, epsilon, **kwargs)
-            case "antilop":
-                # print("antilop")
-                self.w = self._run_antilop(self.X, self.y, n_iter, epsilon, **kwargs)
-
-    # @staticmethod
-    # @njit('double[:,:](double[:,:], double[:,:],double,int_,double[:,:])')
-    # def _solve_NQP(Q, q, epsilon, max_n_iter, x):
-
-    #     # Initialize
-    #     x_diff     = np.zeros_like(x)
-    #     grad_f     = q.copy()
-    #     grad_f_bar = q.copy()
-
-    #     # Loop over iterations
-    #     for i in range(max_n_iter):
-
-    #         # Get passive set information
-    #         passive_set = np.logical_or(x > 0, grad_f < 0)
-    #         # print (f"{passive_set.shape=}")
-    #         n_passive = np.sum(passive_set)
-
-    #         # Calculate gradient
-    #         grad_f_bar[:] = grad_f
-    #         # orig_shape = grad_f_bar
-    #         grad_f_bar = grad_f_bar.flatten()
-    #         grad_f_bar[~passive_set.flatten()] = 0
-    #         grad_f_bar = grad_f_bar.reshape(grad_f.shape)
-    #         grad_norm = np.dot(grad_f_bar.flatten(), grad_f_bar.flatten())
-    #         # print (grad_norm)
-
-    #         # Abort?
-    #         if (n_passive == 0 or grad_norm < epsilon):
-    #             break
-
-    #         # Exact line search
-    #         # print (Q.dot(grad_f_bar).shape, grad_f_bar.shape)
-    #         alpha_den = np.vdot(grad_f_bar.flatten(), Q.dot(grad_f_bar).flatten())
-    #         alpha = grad_norm / alpha_den
-
-    #         # Update x
-    #         x_diff = -x.copy()
-    #         x -= alpha * grad_f_bar
-    #         x = np.maximum(x, 0.)
-    #         x_diff += x
-
-    #         # Update gradient
-    #         grad_f += Q.dot(x_diff)
-    #         # print (grad_f)
-
-    #     # # Return
-    #     return x
-
-    @staticmethod
-    @njit(
-        numba.double[:, ::1](
-            numba.double[:, ::1], numba.double[::1], numba.int_, numba.double
-        )
-    )
-    def _run_antilop(X, Y, n_iter, epsilon):
-
-        # if not n_iter:
-        #     n_iter = 3*Y.shape[0]
-
-        XTX = np.dot(X.T, X)
-        XTY = np.dot(X.T, Y)
-
-        # Normalization factors
-        H_diag = np.diag(XTX).reshape(-1, 1)
-        Q_den = np.sqrt(np.outer(H_diag, H_diag))
-        q_den = np.sqrt(H_diag)
-
-        # Normalize
-        Q = XTX / Q_den
-        q = -XTY.reshape(-1, 1) / q_den
-        # q = -XTY / q_den.flatten()
-
-        # print (XTX.shape, XTY.shape, q_den.flatten().shape)
-
-        # Solve NQP
-        y = np.zeros((X.shape[1], 1))
-        # print (q.shape)
-        # y = self.solveNQP_NUMBA(Q, q, epsilon, max_n_iter, y)
-        y_diff = np.zeros_like(y)
-        grad_f = q.copy()
-        grad_f_bar = q.copy()
-
-        # Loop over iterations
-        for i in range(n_iter):
-
-            # Get passive set information
-            passive_set = np.logical_or(y > 0, grad_f < 0)
-            # print (f"{passive_set.shape=}")
-            n_passive = np.sum(passive_set)
-
-            # Calculate gradient
-            grad_f_bar[:] = grad_f
-            # orig_shape = grad_f_bar
-            grad_f_bar = grad_f_bar.flatten()
-            grad_f_bar[~passive_set.flatten()] = 0
-            grad_f_bar = grad_f_bar.reshape(grad_f.shape)
-            grad_norm = np.dot(grad_f_bar.flatten(), grad_f_bar.flatten())
-            # print (grad_norm)
-
-            # Abort?
-            if n_passive == 0 or grad_norm < epsilon:
-                print("Finished, iter=", i)
-                break
-
-            # Exact line search
-            # print (Q.dot(grad_f_bar).shape, grad_f_bar.shape)
-            alpha_den = np.vdot(grad_f_bar.flatten(), np.dot(Q, grad_f_bar).flatten())
-            alpha = grad_norm / alpha_den
-
-            # Update y
-            y_diff = -y.copy()
-            y -= alpha * grad_f_bar
-            y = np.maximum(y, 0.0)
-            y_diff += y
-
-            # Update gradient
-            grad_f += np.dot(Q, y_diff)
-
-        # Undo normalization
-        x = y / q_den
-
-        # Return
-        return x
-
-    def _run_classic(self, n_iter: int, epsilon: float = 1e-6):
-        X = np.asfortranarray(self.X)
-        L = (X**2).sum(axis=0)
-        if sparse.issparse(self.X):
-            self.w = self._sparse_cd_classic(
-                self.X.data, self.X.indices, self.X.indptr, self.y, L, n_iter
-            )
-        else:
-            self.w = self._cd_classic(X, self.y, L, n_iter, epsilon)
-
-    @staticmethod
-    @njit
-    def _cd_classic(X, y, L, n_iter, epsilon):
-        n_features = X.shape[1]
-        R = np.copy(y)
-        w = np.zeros(n_features)
-        XTX = X.T.dot(X)
-        f = -X.T.dot(y)
-        for _ in range(n_iter):
-            Hxf = np.dot(XTX, w) + f
-            # print (_, np.sum(np.abs(Hxf) <= epsilon)/n_features)
-            criterion_1 = np.all(Hxf >= -epsilon)
-            criterion_2 = np.all(Hxf[w > 0] <= epsilon)
-            if criterion_1 and criterion_2:
-                print("Finished, iter=", _)
-                break
-            for j in range(n_features):
-                if L[j] == 0.0:
-                    continue
-                old = w[j]
-                w[j] = max(w[j] + X[:, j] @ R / L[j], 0)
-                diff = old - w[j]
-                if diff != 0:
-                    R += diff * X[:, j]
-        return w
-
-    @staticmethod
-    @njit
-    def _sparse_cd_classic(X_data, X_indices, X_indptr, y, L, n_iter):
-        n_features = len(X_indptr) - 1
-        w = np.zeros(n_features)
-        R = np.copy(y)
-        for _ in range(n_iter):
-            for j in range(n_features):
-                if L[j] == 0.0:
-                    continue
-                old = w[j]
-                start, end = X_indptr[j : j + 2]
-                scal = 0.0
-                for ind in range(start, end):
-                    scal += X_data[ind] * R[X_indices[ind]]
-                w[j] = max(w[j] + scal / L[j], 0)
-                diff = old - w[j]
-                if diff != 0:
-                    for ind in range(start, end):
-                        R[X_indices[ind]] += diff * X_data[ind]
-        return w
 
 
 def _init_pipes_sampler(fit_instructions, veldisp, beams):
@@ -562,220 +297,6 @@ class RegionsMultiBeam(MultiBeam):
         if memmap:
             output_arr.flush()
 
-    def _gen_stacked_beams(
-        self, pixfrac=1.0, kernel="square", dfillval=0, spatial_scale=1.0
-    ):
-
-        test_dir = np.zeros((2, *test_beam.beam.direct.shape))
-
-        from drizzlepac import adrizzle
-        from reproject import reproject_adaptive
-        from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
-
-        adrizzle.log.setLevel("ERROR")
-        drizzler = adrizzle.do_driz
-
-        new_multibeam = []
-
-        for filt, pa_info in self.PA.items():
-            for pa, beam_idxs in pa_info.items():
-
-                new_beam = deepcopy(self.beams[beam_idxs[0]])
-
-                # Set centre of direct image to the actual coordinates
-                direct_cen = (np.asarray(new_beam.direct.data["REF"].shape) + 1) / 2
-
-                shift_crpix = direct_cen - np.array(
-                    new_beam.direct.wcs.all_world2pix(
-                        [[self.ra, self.dec]],
-                        1,
-                    ).flatten()
-                )
-
-                new_beam.grism.wcs = grizli_utils.transform_wcs(
-                    new_beam.grism.wcs, translation=shift_crpix
-                )
-                new_beam.direct.wcs = grizli_utils.transform_wcs(
-                    new_beam.direct.wcs, translation=shift_crpix
-                )
-
-                sh = new_beam.sh
-                outsci = np.zeros(sh, dtype=np.float32)
-                outwht = np.zeros(sh, dtype=np.float32)
-                outctx = np.zeros(sh, dtype=np.int32)
-
-                outvar = np.zeros(sh, dtype=np.float32)
-                outwv = np.zeros(sh, dtype=np.float32)
-                outcv = np.zeros(sh, dtype=np.int32)
-
-                outcon = np.zeros(sh, dtype=np.float32)
-                outwc = np.zeros(sh, dtype=np.float32)
-                outcc = np.zeros(sh, dtype=np.int32)
-
-                outdir = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
-                outwd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
-                outcd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.int32)
-
-                grism_data = [self.beams[i].grism.data["SCI"] for i in beam_idxs]
-                direct_data = [self.beams[i].beam.direct for i in beam_idxs]
-
-                new_seg = grizli_utils.blot_nearest_exact(
-                    new_beam.beam.seg,
-                    self.beams[beam_idxs[0]].direct.wcs,
-                    new_beam.direct.wcs,
-                    verbose=False,
-                    stepsize=-1,
-                    scale_by_pixel_area=False,
-                )
-
-                for i, idx in enumerate(beam_idxs):
-
-                    beam = self.beams[idx]
-                    direct_wcs_i = beam.direct.wcs
-                    grism_wcs_i = beam.grism.wcs.copy()
-
-                    contam_weight = np.exp(
-                        -(self.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
-                    )
-                    grism_wht = beam.ivar * contam_weight
-                    grism_wht[~np.isfinite(grism_wht)] = 0.0
-                    contam_wht = beam.ivar
-                    contam_wht[~np.isfinite(contam_wht)] = 0.0
-
-                    drizzler(
-                        direct_data[i],
-                        direct_wcs_i,
-                        np.ones_like(direct_data[i]),
-                        new_beam.direct.wcs,
-                        outdir,
-                        outwd,
-                        outcd,
-                        1.0,
-                        "cps",
-                        1,
-                        wcslin_pscale=1.0,
-                        uniqid=1,
-                        pixfrac=pixfrac,
-                        kernel=kernel,
-                        fillval=dfillval,
-                    )
-                    drizzler(
-                        grism_data[i],
-                        # beam.grism.wcs,
-                        grism_wcs_i,
-                        grism_wht,
-                        # np.ones_like(grism_data[i]),
-                        new_beam.grism.wcs,
-                        outsci,
-                        outwht,
-                        outctx,
-                        1.0,
-                        "cps",
-                        1,
-                        wcslin_pscale=1.0,
-                        uniqid=1,
-                        pixfrac=pixfrac,
-                        kernel=kernel,
-                        fillval=dfillval,
-                    )
-                    drizzler(
-                        beam.contam,
-                        # beam.grism.wcs,
-                        grism_wcs_i,
-                        contam_wht,
-                        # np.ones_like(grism_data[i]),
-                        new_beam.grism.wcs,
-                        outcon,
-                        outwc,
-                        outcc,
-                        1.0,
-                        "cps",
-                        1,
-                        wcslin_pscale=1.0,
-                        uniqid=1,
-                        pixfrac=pixfrac,
-                        kernel=kernel,
-                        fillval=dfillval,
-                    )
-
-                    drizzler(
-                        contam_weight,
-                        grism_wcs_i,
-                        grism_wht,
-                        new_beam.grism.wcs,
-                        outvar,
-                        outwv,
-                        outcv,
-                        1.0,
-                        "cps",
-                        1,
-                        wcslin_pscale=1.0,
-                        uniqid=1,
-                        pixfrac=pixfrac,
-                        kernel=kernel,
-                        fillval=dfillval,
-                    )
-
-                # Correct for drizzle scaling
-                area_ratio = 1.0 / new_beam.grism.wcs.pscale**2
-
-                # preserve flux density
-                flux_density_scale = spatial_scale**2
-
-                # science
-                outsci *= area_ratio * flux_density_scale
-                # Direct
-                outdir *= area_ratio * flux_density_scale
-                # Variance
-                outvar *= area_ratio / outwv * flux_density_scale**2
-                outwht = 1 / outvar
-                outwht[(outvar == 0) | (~np.isfinite(outwht))] = 0
-                # Contam
-                outcon *= area_ratio * flux_density_scale
-
-                new_beam.grism.data["SCI"] = outsci
-                new_beam.grism.data["ERR"] = np.sqrt(outvar)
-                new_beam.grism.data["DQ"] = np.zeros_like(outsci)
-                new_beam.contam = outcon
-                new_beam.direct.data["REF"] = outdir
-
-                new_beam.beam = GrismDisperser(
-                    id=self.id,
-                    direct=outdir,
-                    segmentation=new_seg,
-                    origin=np.nanmedian(
-                        np.asarray([self.beams[i].direct.origin for i in beam_idxs]),
-                        axis=0,
-                    ),
-                    pad=np.nanmedian(
-                        np.asarray([self.beams[i].direct.pad for i in beam_idxs]),
-                        axis=0,
-                    ),
-                    grow=np.nanmedian(
-                        np.asarray([self.beams[i].direct.grow for i in beam_idxs]),
-                        axis=0,
-                    ),
-                    beam=self.beams[beam_idxs[0]].beam.beam,
-                    xcenter=0,
-                    ycenter=0,
-                    conf=self.beams[beam_idxs[0]].beam.conf,
-                    fwcpos=self.beams[beam_idxs[0]].beam.fwcpos,
-                    MW_EBV=self.beams[beam_idxs[0]].beam.MW_EBV,
-                    xoffset=0.0,
-                    yoffset=0.0,
-                )
-                new_beam._parse_from_data(
-                    isJWST=True,
-                    contam_sn_mask=[10, 3],
-                    min_mask=self.min_mask,
-                    min_sens=self.min_sens,
-                    mask_resid=self.mask_resid,
-                )
-                new_beam.compute_model()
-                new_multibeam.append(new_beam)
-
-        return new_multibeam
-
     def fit_at_z(
         self,
         z: float = 0.0,
@@ -931,14 +452,6 @@ class RegionsMultiBeam(MultiBeam):
 
         if fit_stacks:
             new_beams = self._gen_stacked_beams()
-            mb_obj = MultiBeam(
-                new_beams,
-                group_name=self.group_name,
-                fcontam=self.fcontam,
-                min_mask=self.min_mask,
-                min_sens=self.min_sens,
-                mask_resid=self.mask_resid,
-            )
             mb_obj.fit_trace_shift()
         else:
             mb_obj = self
@@ -1089,6 +602,9 @@ class RegionsMultiBeam(MultiBeam):
 
         oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
 
+        # plt.imshow(oversamp_seg_maps[-1,1])
+        # plt.show()
+
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
         stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
@@ -1113,7 +629,7 @@ class RegionsMultiBeam(MultiBeam):
                 buffer=shm_stacked_A.buf,
             )
 
-        print(f"{MEMMAP=}")
+        print(f"{memmap=}")
 
         stacked_A.fill(0.0)
 
@@ -1183,7 +699,7 @@ class RegionsMultiBeam(MultiBeam):
 
         output_table_path = out_dir / (
             f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            f"bins_{num_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.csv"
+            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.csv"
         )
 
         # !! This can be placed outside the iteration loop
@@ -1212,7 +728,7 @@ class RegionsMultiBeam(MultiBeam):
         if (not output_table_path.is_file()) or (overwrite):
 
             output_table.write(output_table_path, overwrite=True, format="pandas.csv")
-            iterations = np.arange(num_iters + int(TWO_STAGE))
+            iterations = np.arange(n_iters + int(TWO_STAGE))
             for iteration in iterations:
                 if TWO_STAGE and (iteration == iterations[-1]):
 
@@ -1226,6 +742,7 @@ class RegionsMultiBeam(MultiBeam):
                         replace=False,
                     )
                 print(f"Iteration {iteration}, {rows=}")
+                t0 = time()
 
                 print("Generating models...")
                 with multiprocessing.Pool(
@@ -1246,7 +763,8 @@ class RegionsMultiBeam(MultiBeam):
                     pool.close()
                     pool.join()
 
-                print("Generating models... DONE")
+                t1 = time()
+                print(f"Generating models... DONE {t1-t0:.3f}s")
                 ok_temp = np.sum(stacked_A, axis=1) > 0
 
                 stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
@@ -1273,8 +791,6 @@ class RegionsMultiBeam(MultiBeam):
                     f"{stacked_Ax.shape[0]/stacked_A.shape[-1]:.1%} of original)"
                 )
                 print("NNLS fitting...")
-
-                t0 = time()
 
                 # Proof of concept, this can be improved with a
                 # proper nnls_kwargs dict, and passing tolerance/iters
@@ -1323,8 +839,8 @@ class RegionsMultiBeam(MultiBeam):
                     coeffs = state.beta
                     coeffs[:num_stacks] -= off
 
-                print("NNLS fitting... DONE")
-                print(f"Time taken {time()-t0}s")
+                print(f"NNLS fitting... DONE {time()-t1:.3f}s")
+                # print(f"Time taken {time()-t0}s")
 
                 out_coeffs[ok_temp] = coeffs
                 stacked_modelf = np.dot(out_coeffs, stacked_A)
