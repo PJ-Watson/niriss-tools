@@ -14,23 +14,18 @@ from os import PathLike
 from pathlib import Path
 from time import time
 
-import bagpipes
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas
+import scipy.optimize
 from astropy.io import fits
 from astropy.nddata import block_reduce
 from astropy.table import Table
 from astropy.wcs import WCS
-from bagpipes import model_galaxy
 from grizli import utils as grizli_utils
 from grizli.model import GrismDisperser
 from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
-from pandas._libs.hashtable import SIZE_HINT_LIMIT, duplicated
-from pandas.core import algorithms
-from pandas.core.sorting import get_group_index
 from reproject import reproject_interp
 
 from glass_niriss.grism.fitting_tools import CDNNLS
@@ -41,7 +36,7 @@ from glass_niriss.grism.specgen import (
     check_coverage,
 )
 
-__all__ = ["RegionsMultiBeam", "DEFAULT_PLINE"]
+__all__ = ["MultiRegionFit", "DEFAULT_PLINE"]
 
 pipes_sampler = None
 beams_object = None
@@ -61,7 +56,7 @@ def _init_pipes_sampler(fit_instructions, veldisp, beams):
     beams_object = beams.copy()
 
 
-class RegionsMultiBeam(MultiBeam):
+class MultiRegionFit:
     """
     A multi-region version of `grizli.multifit.MultiBeam`.
 
@@ -90,9 +85,11 @@ class RegionsMultiBeam(MultiBeam):
         **multibeam_kwargs,
     ):
 
-        super().__init__(beams, **multibeam_kwargs)
+        self.MB = MultiBeam(beams=beams, **multibeam_kwargs)
+        self.id, self.ra, self.dec = self.MB.id, self.MB.ra, self.MB.dec
 
-        self.regions_phot_cat = Table.read(binned_data, "PHOT_CAT")
+        self.binned_data = binned_data
+        self.regions_phot_cat = Table.read(self.binned_data, "PHOT_CAT")
         self.regions_phot_cat = self.regions_phot_cat[
             self.regions_phot_cat["bin_id"].astype(int) != 0
         ]
@@ -107,6 +104,30 @@ class RegionsMultiBeam(MultiBeam):
 
         self.run_name = run_name
         self.pipes_dir = pipes_dir
+
+    def add_pipes_info(self, header: fits.Header) -> fits.Header:
+        """
+        Update a header with information about the 2D SED fitting.
+
+        Parameters
+        ----------
+        header : fits.Header
+            The original header.
+
+        Returns
+        -------
+        fits.Header
+            The updated header.
+        """
+        header["HIERARCH BAGPIPES_RUN"] = (
+            str(self.run_name),
+            "The name of the bagpipes run used to generate the prior templates.",
+        )
+        header["HIERARCH BAGPIPES_PHOTCAT"] = (
+            str(self.binned_data),
+            "The binned photometric catalogue and segmentation map used as input for bagpipes.",
+        )
+        return header
 
     @staticmethod
     def _gen_stacked_templates_from_pipes(
@@ -161,8 +182,8 @@ class RegionsMultiBeam(MultiBeam):
                 for k_i, (k, v) in enumerate(beam_info.items()):
                     for ib in v["list_idx"]:
                         beam = beams_object[ib]
-                        if seg_maps.ndim==3:
-                            beam_seg = seg_maps[ib]==seg_id
+                        if seg_maps.ndim == 3:
+                            beam_seg = seg_maps[ib] == seg_id
                         else:
                             beam_seg = seg_maps[seg_idx][ib]
                         tmodel = beam.compute_model(
@@ -247,8 +268,8 @@ class RegionsMultiBeam(MultiBeam):
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
                     for ib in v["list_idx"]:
-                        if seg_maps.ndim==3:
-                            beam_seg = seg_maps[ib]==seg_id
+                        if seg_maps.ndim == 3:
+                            beam_seg = seg_maps[ib] == seg_id
                         else:
                             beam_seg = seg_maps[seg_idx][ib]
                         tmodel = beams_object[ib].compute_model(
@@ -258,7 +279,7 @@ class RegionsMultiBeam(MultiBeam):
                             is_cgs=True,
                         )
                         models_arr[i0 : i0 + np.prod(v["2d_shape"])] += (
-                            coeffs[f"{seg_id}_{sample_i}"] * tmodel
+                            coeffs[f"bin_{seg_id}"][sample_i] * tmodel
                         )
 
                         i0 += np.prod(v["2d_shape"])
@@ -315,9 +336,9 @@ class RegionsMultiBeam(MultiBeam):
         veldisp: float = 500,
         fit_stacks: bool = True,
         direct_images: None = None,
+        out_dir: PathLike | None = None,
         temp_dir: PathLike | None = None,
         memmap: bool = False,
-        out_dir: PathLike | None = None,
         cpu_count: int = -1,
         overwrite: bool = False,
         use_lines: dict = CLOUDY_LINE_MAP,
@@ -369,16 +390,17 @@ class RegionsMultiBeam(MultiBeam):
         direct_images : _type_, optional
             WIP, may allow for changing beam direct images at some point.
             By default ``None``.
+        out_dir : PathLike | None, optional
+            Where the output files will be written. If ``None`` (default),
+            the current working directory will be used.
         temp_dir : PathLike | None, optional
             The temporary directory to use for memmapped files (if
             ``memmap==True``). If ``None`` (default), the current working
             directory will be used.
         memmap : bool, optional
             Whether to use a memmap to store large files. By default
-            ``True`` (``False`` is still WIP).
-        out_dir : PathLike | None, optional
-            Where the output files will be written. If ``None`` (default),
-            the current working directory will be used.
+            ``False``. If ``True``, the large model array will be written
+            to a temporary array on disk.
         cpu_count : int, optional
             The number of CPUs to use for multiprocessing, by default -1.
         overwrite : bool, optional
@@ -446,9 +468,6 @@ class RegionsMultiBeam(MultiBeam):
         except:
             HAS_ADELIE = False
 
-        import numpy.linalg
-        import scipy.optimize
-
         nnls_iters = np.atleast_1d(nnls_iters).astype(int)
         nnls_tol = np.atleast_1d(nnls_tol)
         TWO_STAGE = (len(nnls_iters) > 1) | (len(nnls_tol) > 1)
@@ -456,25 +475,27 @@ class RegionsMultiBeam(MultiBeam):
         if spec_wavs is None:
             spec_wavs = np.arange(10000.0, 23000.0, 45.0)
 
-        # if fit_stacks:
-        #     new_beams = self._gen_stacked_beams()
-        #     mb_obj.fit_trace_shift()
-        # else:
-        #     mb_obj = self
-
         if memmap:
             if temp_dir is None:
                 temp_dir = Path.cwd()
-            temp_dir.mkdir(exist_ok=True, parents=True)
+            else:
+                temp_dir = Path(temp_dir)
+                temp_dir.mkdir(exist_ok=True, parents=True)
 
-        mb_obj.init_poly_coeffs(poly_order=poly_order)
+        if out_dir is None:
+            out_dir = Path.cwd()
+        else:
+            out_dir = Path(out_dir)
+            out_dir.mkdir(exist_ok=True, parents=True)
+
+        self.MB.init_poly_coeffs(poly_order=poly_order)
 
         if fit_background:
             self.fit_bg = True
-            A = np.vstack((mb_obj.A_bg, mb_obj.A_poly))
+            A = np.vstack((self.MB.A_bg, self.MB.A_poly))
         else:
             self.fit_bg = False
-            A = mb_obj.A_poly * 1
+            A = self.MB.A_poly * 1
 
         rng = np.random.default_rng(seed=seed)
 
@@ -496,32 +517,25 @@ class RegionsMultiBeam(MultiBeam):
 
         # Try to allow for both memory and file-backed multiprocessing of
         # large arrays
-        if out_dir is None:
-            out_dir = Path.cwd()
-        out_dir.mkdir(exist_ok=True, parents=True)
-        if memmap:
-            if temp_dir is None:
-                temp_dir = Path.cwd()
-            temp_dir.mkdir(exist_ok=True, parents=True)
 
         smm = SharedMemoryManager()
         smm.start()
 
         # If we are not oversampling, we can drastically reduce the memory usage
-        if oversamp_factor==1:
+        if oversamp_factor == 1:
             oversamp_seg_maps_shape = (
-                mb_obj.N,
-                mb_obj.beams[0].beam.sh[0],
-                mb_obj.beams[0].beam.sh[1]
+                self.MB.N,
+                self.MB.beams[0].beam.sh[0],
+                self.MB.beams[0].beam.sh[1],
             )
         else:
             oversamp_seg_maps_shape = (
                 self.n_regions,
-                mb_obj.N,
-                mb_obj.beams[0].beam.sh[0],
-                mb_obj.beams[0].beam.sh[1],
+                self.MB.N,
+                self.MB.beams[0].beam.sh[0],
+                self.MB.beams[0].beam.sh[1],
             )
-            
+
         if memmap:
             oversamp_seg_maps = np.memmap(
                 temp_dir / "memmap_oversamp_seg_maps.dat",
@@ -545,8 +559,8 @@ class RegionsMultiBeam(MultiBeam):
         start_idx = 0
 
         oversampled_shape = (
-            oversamp_factor * mb_obj.beams[0].beam.sh[0],
-            oversamp_factor * mb_obj.beams[0].beam.sh[1],
+            oversamp_factor * self.MB.beams[0].beam.sh[0],
+            oversamp_factor * self.MB.beams[0].beam.sh[1],
         )
 
         if memmap:
@@ -569,7 +583,7 @@ class RegionsMultiBeam(MultiBeam):
 
         start_idx = 0
         for i, (beam_cutout, cutout_shape) in enumerate(
-            zip(mb_obj.beams, mb_obj.Nflat)
+            zip(self.MB.beams, self.MB.Nflat)
         ):
             beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
             if not beam_name in beam_info:
@@ -595,7 +609,7 @@ class RegionsMultiBeam(MultiBeam):
                 order=0,
             )
 
-            if oversamp_factor==1:
+            if oversamp_factor == 1:
                 oversamp_seg_maps[i] = oversampled
                 continue
 
@@ -622,14 +636,10 @@ class RegionsMultiBeam(MultiBeam):
 
         oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
 
-        # plt.imshow(oversamp_seg_maps[0])
-        # plt.show()
-        # exit()
-
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
         stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
-        temp_offset = A.shape[0] - mb_obj.N + num_stacks
+        temp_offset = A.shape[0] - self.MB.N + num_stacks
 
         stacked_A_shape = (temp_offset + NTEMP, stacked_shape)
 
@@ -654,8 +664,6 @@ class RegionsMultiBeam(MultiBeam):
 
         stacked_A.fill(0.0)
 
-        print(stacked_A.shape, stacked_A_shape)
-
         # Offset for background
         if fit_background:
             off = 0.04
@@ -670,35 +678,35 @@ class RegionsMultiBeam(MultiBeam):
         for k_i, (k, v) in enumerate(beam_info.items()):
             stack_idxs = np.r_["0,2", *v["flat_slice"]]
 
-            _scif = mb_obj.scif[stack_idxs]
+            _scif = self.MB.scif[stack_idxs]
             stacked_scif[start_idx : start_idx + np.prod(v["2d_shape"])] = np.nanmedian(
                 _scif,
                 axis=0,
             )
             stacked_weightf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
                 np.nanmedian(
-                    mb_obj.weightf[stack_idxs],
+                    self.MB.weightf[stack_idxs],
                     axis=0,
                 )
             )
             stacked_fit_mask[start_idx : start_idx + np.prod(v["2d_shape"])] = np.any(
-                mb_obj.fit_mask[stack_idxs],
+                self.MB.fit_mask[stack_idxs],
                 axis=0,
             )
             if fit_background:
                 stacked_A[k_i, start_idx : start_idx + np.prod(v["2d_shape"])] = 1.0
                 stacked_A[
-                    num_stacks : num_stacks + mb_obj.A_poly.shape[0],
+                    num_stacks : num_stacks + self.MB.A_poly.shape[0],
                     start_idx : start_idx + np.prod(v["2d_shape"]),
-                ] = np.nanmean(mb_obj.A_poly[:, stack_idxs], axis=1)
+                ] = np.nanmean(self.MB.A_poly[:, stack_idxs], axis=1)
             else:
                 stacked_A[
-                    num_stacks : num_stacks + mb_obj.A_poly.shape[0],
+                    num_stacks : num_stacks + self.MB.A_poly.shape[0],
                     start_idx : start_idx + np.prod(v["2d_shape"]),
-                ] = np.nanmean(mb_obj.A_poly[:, stack_idxs], axis=1)
+                ] = np.nanmean(self.MB.A_poly[:, stack_idxs], axis=1)
 
             stacked_ivarf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
-                np.nanmedian(mb_obj.ivarf[stack_idxs], axis=0)
+                np.nanmedian(self.MB.ivarf[stack_idxs], axis=0)
             )
 
             start_idx += np.prod(v["2d_shape"])
@@ -709,18 +717,23 @@ class RegionsMultiBeam(MultiBeam):
         chi2_tracker = []
 
         output_table = Table(
+            [
+                [0],
+                [0.0],
+                np.zeros((1, n_samples), dtype=int),
+                *np.zeros((temp_offset, 1)),
+                *np.zeros((self.n_regions, 1, n_samples)),
+            ],
             names=["iteration", "chi2", "rows"]
             + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
-            + [
-                f"{p[0]}_{p[1]}"
-                for p in product(self.regions_phot_cat["bin_id"], np.arange(n_samples))
-            ],
-            dtype=[int, float, str] + [float] * stacked_A.shape[0],
+            + [f"bin_{p}" for p in self.regions_phot_cat["bin_id"]],
+            dtype=[int, float, int] + [float] * temp_offset + [float] * self.n_regions,
         )
+        output_table = output_table[:0]
 
         output_table_path = out_dir / (
             f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.csv"
+            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
         )
 
         # !! This can be placed outside the iteration loop
@@ -748,14 +761,14 @@ class RegionsMultiBeam(MultiBeam):
 
         if (not output_table_path.is_file()) or (overwrite):
 
-            output_table.write(output_table_path, overwrite=True, format="pandas.csv")
+            output_table.write(output_table_path, overwrite=True, format="fits")
             iterations = np.arange(n_iters + int(TWO_STAGE))
             for iteration in iterations:
                 if TWO_STAGE and (iteration == iterations[-1]):
 
                     best_iter = np.argmin(output_table["chi2"])
 
-                    rows = [int(s) for s in output_table["rows"][best_iter].split(";")]
+                    rows = [int(s) for s in output_table["rows"][best_iter]]
                 else:
                     rows = rng.choice(
                         np.arange(n_post_samples, dtype=int),
@@ -772,7 +785,7 @@ class RegionsMultiBeam(MultiBeam):
                     initargs=(
                         fit_instructions,
                         veldisp,
-                        mb_obj.beams,
+                        self.MB.beams,
                     ),
                 ) as pool:
                     for s_i, s in enumerate(self.regions_seg_ids):
@@ -813,9 +826,6 @@ class RegionsMultiBeam(MultiBeam):
                 )
                 print("NNLS fitting...")
 
-                # Proof of concept, this can be improved with a
-                # proper nnls_kwargs dict, and passing tolerance/iters
-                # as a double-valued list
                 if TWO_STAGE and (iteration == iterations[-1]):
                     print("Final iteration")
                     _nnls_i = nnls_iters[1]
@@ -833,15 +843,11 @@ class RegionsMultiBeam(MultiBeam):
                     coeffs, rnorm, info = scipy.optimize._nnls._nnls(
                         stacked_Ax, y + off, _nnls_i
                     )
-                    # coeffs, rnorm, info = _cython_nnls._nnls(
-                    #     stacked_Ax, y + off, nnls_iters
-                    # )
                     coeffs[:num_stacks] -= off
 
                 elif nnls_method == "numba":
 
                     nnls_solver = CDNNLS(stacked_Ax, y + off)
-                    # nnls_solver._run(stacked_Ax.shape[1]*3)
                     nnls_solver.run(n_iter=_nnls_i, epsilon=_nnls_t)
                     coeffs = nnls_solver.w
                     coeffs[:num_stacks] -= off
@@ -861,7 +867,6 @@ class RegionsMultiBeam(MultiBeam):
                     coeffs[:num_stacks] -= off
 
                 print(f"NNLS fitting... DONE {time()-t1:.3f}s")
-                # print(f"Time taken {time()-t0}s")
 
                 out_coeffs[ok_temp] = coeffs
                 stacked_modelf = np.dot(out_coeffs, stacked_A)
@@ -872,13 +877,14 @@ class RegionsMultiBeam(MultiBeam):
                         * stacked_ivarf
                     )[stacked_fit_mask]
                 )
-
                 output_table.add_row(
                     [
                         iteration,
                         chi2,
-                        ";".join(f"{r:0>3}" for r in rows),
-                        *out_coeffs,
+                        # ";".join(f"{r:0>3}" for r in rows),
+                        rows,
+                        *out_coeffs[:temp_offset],
+                        *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
                     ]
                 )
                 output_table.write(output_table_path, overwrite=True)
@@ -889,17 +895,18 @@ class RegionsMultiBeam(MultiBeam):
 
         else:
             print("Loading previous fit...")
-            output_table = Table.read(output_table_path, format="pandas.csv")
+            output_table = Table.read(output_table_path, format="fits")
 
         best_iter = np.argmin(output_table["chi2"])
-
-        out_coeffs = np.array(output_table[best_iter][3:])
+        out_coeffs = np.asarray(
+            [i for d in output_table[best_iter][3:] for i in np.atleast_1d(d)]
+        ).ravel()
         if fit_background:
             for k_i, (k, v) in enumerate(beam_info.items()):
                 for ib in v["list_idx"]:
-                    mb_obj.beams[ib].background = out_coeffs[k_i]
+                    self.MB.beams[ib].background = out_coeffs[k_i]
 
-        best_rows = [int(s) for s in output_table["rows"][best_iter].split(";")]
+        best_rows = [int(s) for s in output_table["rows"][best_iter]]
 
         if save_stacks:
             print("Generating models...")
@@ -910,7 +917,7 @@ class RegionsMultiBeam(MultiBeam):
                 initargs=(
                     fit_instructions,
                     veldisp,
-                    mb_obj.beams,
+                    self.MB.beams,
                 ),
             ) as pool:
                 for s_i, s in enumerate(self.regions_seg_ids):
@@ -935,7 +942,7 @@ class RegionsMultiBeam(MultiBeam):
                 initargs=(
                     fit_instructions,
                     veldisp,
-                    mb_obj.beams,
+                    self.MB.beams,
                 ),
             ) as pool:
                 for s_i, s in enumerate(self.regions_seg_ids):
@@ -992,15 +999,18 @@ class RegionsMultiBeam(MultiBeam):
                     h.header["GRISM"] = (k.split("_")[0], "Grism")
                     # h.header['ISFLAM'] = (flambda, 'Pixels in f-lam units')
                     h.header["CONF"] = (
-                        mb_obj.beams[0].beam.conf.conf_file,
+                        self.MB.beams[0].beam.conf.conf_file,
                         "Configuration file",
                     )
+                    h.header["REDSHIFT"] = (z, "Redshift used")
+                    h.header["CHI2"] = output_table["chi2"][best_iter]
+                    h.header = self.add_pipes_info(h.header)
                 stacked_hdul.extend(hdus)
 
                 start_idx += np.prod(v["2d_shape"])
 
             stacked_hdul.writeto(
-                f"regions_{self.id:05d}_z_{z}_stacked.fits",
+                out_dir / f"regions_{self.id:05d}_z_{z}_stacked.fits",
                 output_verify="silentfix",
                 overwrite=True,
             )
@@ -1010,15 +1020,6 @@ class RegionsMultiBeam(MultiBeam):
             for k_i, (k, v) in enumerate(beam_info.items()):
                 beam_models_len += np.prod(v["2d_shape"]) * len(v["list_idx"])
 
-            # shm_beam_models = smm.SharedMemory(
-            #     size=np.dtype(float).itemsize * beam_models_len
-            # )
-            # flat_beam_models = np.ndarray(
-            #     (beam_models_len),
-            #     dtype=float,
-            #     buffer=shm_beam_models.buf,
-            # )
-
             if memmap:
                 flat_beam_models = np.memmap(
                     temp_dir / "memmap_beams_model.dat",
@@ -1027,14 +1028,6 @@ class RegionsMultiBeam(MultiBeam):
                     shape=(beam_models_len),
                 )
             else:
-                # shm_stacked_A = smm.SharedMemory(
-                #     size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
-                # )
-                # stacked_A = np.ndarray(
-                #     stacked_A_shape,
-                #     dtype=float,
-                #     buffer=shm_stacked_A.buf,
-                # )
 
                 shm_beam_models = smm.SharedMemory(
                     size=np.dtype(float).itemsize * beam_models_len
@@ -1050,10 +1043,6 @@ class RegionsMultiBeam(MultiBeam):
 
             beams_fn = partial(
                 self._gen_beam_templates_from_pipes,
-                # shared_seg_name=shm_seg_maps.name,
-                # seg_maps_shape=oversamp_seg_maps.shape,
-                # shared_models_name=shm_beam_models.name,
-                # models_shape=flat_beam_models.shape,
                 shared_seg_name=(
                     temp_dir / "memmap_oversamp_seg_maps.dat"
                     if memmap
@@ -1072,7 +1061,7 @@ class RegionsMultiBeam(MultiBeam):
                 beam_info=beam_info,
                 temp_offset=temp_offset,
                 cont_only=False,
-                rows=[int(s) for s in output_table["rows"][best_iter].split(";")],
+                rows=best_rows,
                 coeffs=output_table[best_iter],
                 memmap=memmap,
             )
@@ -1089,7 +1078,7 @@ class RegionsMultiBeam(MultiBeam):
                 with multiprocessing.Pool(
                     processes=cpu_count,
                     initializer=_init_pipes_sampler,
-                    initargs=(fit_instructions, veldisp, mb_obj.beams),
+                    initargs=(fit_instructions, veldisp, self.MB.beams),
                 ) as pool:
                     for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
                         pool.apply_async(
@@ -1105,24 +1094,24 @@ class RegionsMultiBeam(MultiBeam):
                 start_idx = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
                     for ib in v["list_idx"]:
-                        mb_obj.beams[ib].beam.model = flat_beam_models[
+                        self.MB.beams[ib].beam.model = flat_beam_models[
                             i0 : i0 + np.prod(v["2d_shape"])
                         ].reshape(v["2d_shape"])
                         i0 += np.prod(v["2d_shape"])
                     start_idx += np.prod(v["2d_shape"])
 
                 hdu = drizzle_to_wavelength(
-                    mb_obj.beams,
+                    self.MB.beams,
                     ra=self.ra,
                     dec=self.dec,
-                    # wave=line_wave_obs,
                     wave=l_v["wave"] * (1 + z),
-                    fcontam=mb_obj.fcontam,
+                    fcontam=self.MB.fcontam,
                     **pline,
                 )
 
                 hdu[0].header["REDSHIFT"] = (z, "Redshift used")
                 hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
+                hdu[0].header = self.add_pipes_info(hdu[0].header)
                 for e in [-4, -3, -2, -1]:
                     hdu[e].header["EXTVER"] = l_v["grizli"]
                     hdu[e].header["REDSHIFT"] = (z, "Redshift used")
@@ -1161,12 +1150,13 @@ class RegionsMultiBeam(MultiBeam):
                 )
 
                 line_wcs = WCS(line_hdu[1].header)
-                segm = mb_obj.drizzle_segmentation(wcsobj=line_wcs)
+                segm = self.MB.drizzle_segmentation(wcsobj=line_wcs)
                 seg_hdu = fits.ImageHDU(data=segm.astype(np.int32), name="SEG")
                 line_hdu.insert(1, seg_hdu)
 
                 line_hdu.writeto(
-                    f"regions_{self.id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
+                    out_dir
+                    / f"regions_{self.id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
                     output_verify="silentfix",
                     overwrite=True,
                 )
@@ -1180,15 +1170,15 @@ class RegionsMultiBeam(MultiBeam):
         # )
 
         if fit_background:
-            poly_coeffs = out_coeffs[num_stacks : num_stacks + mb_obj.n_poly]
+            poly_coeffs = out_coeffs[num_stacks : num_stacks + self.MB.n_poly]
         else:
-            poly_coeffs = out_coeffs[: mb_obj.n_poly]
+            poly_coeffs = out_coeffs[: self.MB.n_poly]
 
         # print(self.n_poly, self.N)
         # print(num_stacks)
         # print(f"{out_coeffs=}")
         # print(poly_coeffs, self.x_poly)
-        mb_obj.y_poly = np.dot(poly_coeffs, mb_obj.x_poly)
+        self.MB.y_poly = np.dot(poly_coeffs, self.MB.x_poly)
         # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
 
         # return A, out_coeffs, chi2, stacked_modelf
