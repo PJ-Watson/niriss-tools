@@ -161,8 +161,10 @@ class RegionsMultiBeam(MultiBeam):
                 for k_i, (k, v) in enumerate(beam_info.items()):
                     for ib in v["list_idx"]:
                         beam = beams_object[ib]
-
-                        beam_seg = seg_maps[seg_idx][ib]
+                        if seg_maps.ndim==3:
+                            beam_seg = seg_maps[ib]==seg_id
+                        else:
+                            beam_seg = seg_maps[seg_idx][ib]
                         tmodel = beam.compute_model(
                             spectrum_1d=temp_resamp_1d,
                             thumb=beam.beam.direct * beam_seg,
@@ -245,9 +247,13 @@ class RegionsMultiBeam(MultiBeam):
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
                     for ib in v["list_idx"]:
+                        if seg_maps.ndim==3:
+                            beam_seg = seg_maps[ib]==seg_id
+                        else:
+                            beam_seg = seg_maps[seg_idx][ib]
                         tmodel = beams_object[ib].compute_model(
                             spectrum_1d=temp_resamp_1d,
-                            thumb=beams_object[ib].beam.direct * seg_maps[seg_idx][ib],
+                            thumb=beams_object[ib].beam.direct * beam_seg,
                             in_place=False,
                             is_cgs=True,
                         )
@@ -450,11 +456,11 @@ class RegionsMultiBeam(MultiBeam):
         if spec_wavs is None:
             spec_wavs = np.arange(10000.0, 23000.0, 45.0)
 
-        if fit_stacks:
-            new_beams = self._gen_stacked_beams()
-            mb_obj.fit_trace_shift()
-        else:
-            mb_obj = self
+        # if fit_stacks:
+        #     new_beams = self._gen_stacked_beams()
+        #     mb_obj.fit_trace_shift()
+        # else:
+        #     mb_obj = self
 
         if memmap:
             if temp_dir is None:
@@ -488,6 +494,8 @@ class RegionsMultiBeam(MultiBeam):
             n_fit_comps = test_post["samples2d"].shape[1]
             n_post_samples = test_post["samples2d"].shape[0]
 
+        # Try to allow for both memory and file-backed multiprocessing of
+        # large arrays
         if out_dir is None:
             out_dir = Path.cwd()
         out_dir.mkdir(exist_ok=True, parents=True)
@@ -499,14 +507,21 @@ class RegionsMultiBeam(MultiBeam):
         smm = SharedMemoryManager()
         smm.start()
 
-        # Try to allow for both memory and file-backed multiprocessing of
-        # large arrays
-        oversamp_seg_maps_shape = (
-            self.n_regions,
-            mb_obj.N,
-            mb_obj.beams[0].beam.sh[0],
-            mb_obj.beams[0].beam.sh[1],
-        )
+        # If we are not oversampling, we can drastically reduce the memory usage
+        if oversamp_factor==1:
+            oversamp_seg_maps_shape = (
+                mb_obj.N,
+                mb_obj.beams[0].beam.sh[0],
+                mb_obj.beams[0].beam.sh[1]
+            )
+        else:
+            oversamp_seg_maps_shape = (
+                self.n_regions,
+                mb_obj.N,
+                mb_obj.beams[0].beam.sh[0],
+                mb_obj.beams[0].beam.sh[1],
+            )
+            
         if memmap:
             oversamp_seg_maps = np.memmap(
                 temp_dir / "memmap_oversamp_seg_maps.dat",
@@ -523,6 +538,7 @@ class RegionsMultiBeam(MultiBeam):
                 dtype=float,
                 buffer=shm_seg_maps.buf,
             )
+
         oversamp_seg_maps.fill(0.0)
 
         beam_info = {}
@@ -579,6 +595,10 @@ class RegionsMultiBeam(MultiBeam):
                 order=0,
             )
 
+            if oversamp_factor==1:
+                oversamp_seg_maps[i] = oversampled
+                continue
+
             with Pool(processes=cpu_count) as pool:
                 multi_fn = partial(
                     self._reduce_seg_map,
@@ -602,8 +622,9 @@ class RegionsMultiBeam(MultiBeam):
 
         oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
 
-        # plt.imshow(oversamp_seg_maps[-1,1])
+        # plt.imshow(oversamp_seg_maps[0])
         # plt.show()
+        # exit()
 
         NTEMP = self.n_regions * n_samples
         num_stacks = len([*beam_info.keys()])
