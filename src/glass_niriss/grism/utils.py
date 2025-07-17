@@ -75,11 +75,33 @@ def gen_stacked_beams(
     for filt, pa_info in mb.PA.items():
         for pa, beam_idxs in pa_info.items():
 
-            new_beam = deepcopy(mb.beams[beam_idxs[0]])
+            # As a reference beam, we use the one with the smallest shift from the centre
+            # along the x-axis
+            # This minimises the chance of trace pixel errors due to integer rounding
+            # in the grizli and grismconf code
+            direct_cen = (
+                np.asarray(mb.beams[beam_idxs[0]].direct.data["REF"].shape) + 1
+            ) / 2
+
+            shift_dx = np.zeros(len(beam_idxs))
+            for i, b_i in enumerate(beam_idxs):
+                shift_dx[i] = (
+                    direct_cen
+                    - np.array(
+                        mb.beams[b_i]
+                        .direct.wcs.all_world2pix(
+                            [[mb.ra, mb.dec]],
+                            1,
+                        )
+                        .flatten()
+                    )
+                )[0]
+
+            new_beam = deepcopy(
+                mb.beams[beam_idxs[np.argmin(np.abs(shift_dx - np.round(shift_dx)))]]
+            )
 
             # Set centre of direct image to the actual coordinates
-            direct_cen = (np.asarray(new_beam.direct.data["REF"].shape) + 1) / 2
-
             shift_crpix = direct_cen - np.array(
                 new_beam.direct.wcs.all_world2pix(
                     [[mb.ra, mb.dec]],
@@ -93,13 +115,6 @@ def gen_stacked_beams(
             new_beam.direct.wcs = grizli_utils.transform_wcs(
                 new_beam.direct.wcs, translation=shift_crpix
             )
-
-            # test = new_beam.direct.wcs.all_pix2world(
-            #     [direct_cen],
-            #     1,
-            # ).flatten()
-            # print (direct_cen, test, mb.ra, mb.dec)
-            # exit()
 
             sh = new_beam.sh
             outsci = np.zeros(sh, dtype=np.float32)
@@ -243,7 +258,7 @@ def gen_stacked_beams(
             new_beam.direct.data["REF"] = outdir
             new_beam.direct.header.update(grizli_utils.to_header(new_beam.direct.wcs))
             new_beam.grism.header.update(grizli_utils.to_header(new_beam.grism.wcs))
-
+            # print (dir(new_beam))
             new_beam.beam = GrismDisperser(
                 id=mb.id,
                 direct=outdir,
@@ -269,6 +284,15 @@ def gen_stacked_beams(
                 xoffset=0.0,
                 yoffset=0.0,
             )
+            new_beam.beam.compute_model()
+            print(new_beam.beam.model.shape)
+            print(outsci.shape)
+            print(outvar.shape)
+            print(outcon.shape)
+
+            new_beam.modelf = new_beam.beam.modelf
+            new_beam.model = new_beam.beam.modelf.reshape(new_beam.beam.sh_beam)
+            # new_beam.compute_model()
             new_beam._parse_from_data(
                 isJWST=True,
                 contam_sn_mask=[10, 3],
@@ -278,7 +302,6 @@ def gen_stacked_beams(
             )
             # print (dir(new_beam))
             # exit()
-            new_beam.compute_model()
             new_beam_list.append(new_beam)
 
     new_multibeam = MultiBeam(

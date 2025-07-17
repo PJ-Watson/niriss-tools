@@ -678,9 +678,8 @@ class MultiRegionFit:
         for k_i, (k, v) in enumerate(beam_info.items()):
             stack_idxs = np.r_["0,2", *v["flat_slice"]]
 
-            _scif = self.MB.scif[stack_idxs]
             stacked_scif[start_idx : start_idx + np.prod(v["2d_shape"])] = np.nanmedian(
-                _scif,
+                self.MB.scif[stack_idxs],
                 axis=0,
             )
             stacked_weightf[start_idx : start_idx + np.prod(v["2d_shape"])] = (
@@ -716,21 +715,6 @@ class MultiRegionFit:
         coeffs_tracker = []
         chi2_tracker = []
 
-        output_table = Table(
-            [
-                [0],
-                [0.0],
-                np.zeros((1, n_samples), dtype=int),
-                *np.zeros((temp_offset, 1)),
-                *np.zeros((self.n_regions, 1, n_samples)),
-            ],
-            names=["iteration", "chi2", "rows"]
-            + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
-            + [f"bin_{p}" for p in self.regions_phot_cat["bin_id"]],
-            dtype=[int, float, int] + [float] * temp_offset + [float] * self.n_regions,
-        )
-        output_table = output_table[:0]
-
         output_table_path = out_dir / (
             f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
             f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
@@ -759,10 +743,51 @@ class MultiRegionFit:
             memmap=memmap,
         )
 
-        if (not output_table_path.is_file()) or (overwrite):
+        init_col_names = [
+            "iteration",
+            "chi2",
+            "max_nnls_iters",
+            "solve_nnls_iters",
+            "nnls_tol",
+            "rows",
+        ]
+
+        if output_table_path.is_file() and not overwrite:
+            output_table = Table.read(output_table_path, format="fits")
+        else:
+            output_table = Table(
+                [
+                    [0],
+                    *np.zeros((len(init_col_names) - 2, 1)),
+                    np.zeros((1, n_samples), dtype=int),
+                    *np.zeros((temp_offset, 1)),
+                    *np.zeros((self.n_regions, 1, n_samples)),
+                ],
+                names=init_col_names
+                + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
+                + [f"bin_{p}" for p in self.regions_phot_cat["bin_id"]],
+                dtype=[int, float, int, int, float, int]
+                + [float] * temp_offset
+                + [float] * self.n_regions,
+            )
+            output_table = output_table[:0]
+
+        prev_iters = len(output_table)
+        if prev_iters < n_iters + int(TWO_STAGE):
+
+            for x in np.arange(prev_iters):
+                rows = rng.choice(
+                    np.arange(n_post_samples, dtype=int),
+                    size=n_samples,
+                    replace=False,
+                )
+
+            remaining_iters = n_iters + int(TWO_STAGE) - prev_iters
 
             output_table.write(output_table_path, overwrite=True, format="fits")
-            iterations = np.arange(n_iters + int(TWO_STAGE))
+
+            iterations = np.arange(prev_iters, n_iters + int(TWO_STAGE))
+
             for iteration in iterations:
                 if TWO_STAGE and (iteration == iterations[-1]):
 
@@ -881,7 +906,9 @@ class MultiRegionFit:
                     [
                         iteration,
                         chi2,
-                        # ";".join(f"{r:0>3}" for r in rows),
+                        _nnls_i,
+                        state.iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
+                        _nnls_t,
                         rows,
                         *out_coeffs[:temp_offset],
                         *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
@@ -893,13 +920,13 @@ class MultiRegionFit:
 
             del stacked_Ax
 
-        else:
-            print("Loading previous fit...")
-            output_table = Table.read(output_table_path, format="fits")
-
         best_iter = np.argmin(output_table["chi2"])
         out_coeffs = np.asarray(
-            [i for d in output_table[best_iter][3:] for i in np.atleast_1d(d)]
+            [
+                i
+                for d in output_table[best_iter][len(init_col_names) :]
+                for i in np.atleast_1d(d)
+            ]
         ).ravel()
         if fit_background:
             for k_i, (k, v) in enumerate(beam_info.items()):
@@ -910,7 +937,6 @@ class MultiRegionFit:
 
         if save_stacks:
             print("Generating models...")
-            # import traceback
             with multiprocessing.Pool(
                 processes=cpu_count,
                 initializer=_init_pipes_sampler,
