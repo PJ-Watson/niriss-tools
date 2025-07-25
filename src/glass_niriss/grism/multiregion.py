@@ -146,6 +146,8 @@ class MultiRegionFit:
         rm_line=None,
         rows=None,
         memmap: bool = False,
+        id_shifts=None,
+        n_shifted_rows=None,
     ):
         seg_id = int(seg_id)
 
@@ -167,12 +169,29 @@ class MultiRegionFit:
                 temps_arr = np.ndarray(models_shape, dtype=float, buffer=shm_temps.buf)
 
             with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-                samples2d = np.array(post_file["samples2d"])
+                samples2d = np.array(post_file["samples2d"])[rows]
 
-            for sample_i, row in enumerate(rows):
+            # Just make one set of posterior samples from all possible seg ids
+            if (id_shifts is not None) and (len(id_shifts) > 0):
+                for s in id_shifts:
+                    shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
+                    with h5py.File(
+                        Path(posterior_dir) / f"{shifted_id}.h5", "r"
+                    ) as post_file:
+                        samples2d = np.concatenate(
+                            (
+                                samples2d,
+                                np.array(post_file["samples2d"])[
+                                    rows[:n_shifted_rows]
+                                ].reshape(n_shifted_rows, -1),
+                            ),
+                            axis=0,
+                        )
+
+            for sample_i, sample in enumerate(samples2d):
 
                 temp_resamp_1d = pipes_sampler.sample(
-                    samples2d[row],
+                    sample,
                     spec_wavs=spec_wavs,
                     cont_only=cont_only,
                     rm_line=rm_line,
@@ -222,15 +241,15 @@ class MultiRegionFit:
         shared_models_name=None,
         models_shape=None,
         posterior_dir=None,
-        n_samples=None,
         spec_wavs=None,
         beam_info=None,
-        temp_offset=None,
         cont_only=False,
         rm_line=None,
         rows=None,
         coeffs=None,
         memmap: bool = False,
+        id_shifts=None,
+        n_shifted_rows=None,
     ):
         seg_id = int(seg_id)
 
@@ -253,13 +272,35 @@ class MultiRegionFit:
                     models_shape, dtype=float, buffer=shm_models.buf
                 )
 
-            with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-                samples2d = np.array(post_file["samples2d"])
+            # with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
+            #     samples2d = np.array(post_file["samples2d"])
 
-            for sample_i, row in enumerate(rows):
+            # for sample_i, row in enumerate(rows):
+
+            with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
+                samples2d = np.array(post_file["samples2d"])[rows]
+
+            # Just make one set of posterior samples from all possible seg ids
+            if (id_shifts is not None) and (len(id_shifts) > 0):
+                for s in id_shifts:
+                    shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
+                    with h5py.File(
+                        Path(posterior_dir) / f"{shifted_id}.h5", "r"
+                    ) as post_file:
+                        samples2d = np.concatenate(
+                            (
+                                samples2d,
+                                np.array(post_file["samples2d"])[
+                                    rows[:n_shifted_rows]
+                                ].reshape(n_shifted_rows, -1),
+                            ),
+                            axis=0,
+                        )
+
+            for sample_i, sample in enumerate(samples2d):
 
                 temp_resamp_1d = pipes_sampler.sample(
-                    samples2d[row],
+                    sample,
                     spec_wavs=spec_wavs,
                     cont_only=cont_only,
                     rm_line=rm_line,
@@ -334,7 +375,6 @@ class MultiRegionFit:
         spec_wavs: ArrayLike | None = None,
         oversamp_factor: int = 3,
         veldisp: float = 500,
-        fit_stacks: bool = True,
         direct_images: None = None,
         out_dir: PathLike | None = None,
         temp_dir: PathLike | None = None,
@@ -349,6 +389,8 @@ class MultiRegionFit:
         nnls_method: str = "scipy",
         nnls_iters: int = 100,
         nnls_tol: float = 1e-5,
+        n_shifted: int = 2,
+        n_shifted_samples: int = 1,
         **grizli_kwargs,
     ):
         """
@@ -385,8 +427,6 @@ class MultiRegionFit:
         veldisp : float, optional
             The velocity dispersion of the template spectra in km/s, by
             default ``500``.
-        fit_stacks : bool, optional
-            Fit stacked spectra, by default ``True``. May be redundant.
         direct_images : _type_, optional
             WIP, may allow for changing beam direct images at some point.
             By default ``None``.
@@ -449,6 +489,19 @@ class MultiRegionFit:
             The desired tolerance for the NNLS solver. As with
             ``nnls_iters``, the second value can be used to perform a more
             precise fit after the initial ``n_iters`` attempts.
+        n_shifted : int or None, optional
+            This allows for drawing additional posterior samples from
+            other regions of the object. Regions will be selected
+            randomly, with no preference as to spatial or spectral
+            coherence (they are selected by shifting each segmentation map
+            id when generating the models, hence the name). This reduces
+            the chance of template mismatch based on the SED fit. By
+            default, 2 additional regions will be used.
+        n_shifted_samples : int or None, optional
+            This determines the number of samples drawn from each of the
+            additional regions (i.e. the total number of samples is given
+            by ``n_samples + n_shifted * n_shifted_samples``). By default,
+            only 1 sample is drawn from each extra region.
         **grizli_kwargs : dict, optional
             A catch-all for previous `grizli` keywords. These are
             redundant in the multiregion method, and are kept only to
@@ -497,7 +550,9 @@ class MultiRegionFit:
             self.fit_bg = False
             A = self.MB.A_poly * 1
 
+        # Two RNG, so can compare with and without extra shift samples
         rng = np.random.default_rng(seed=seed)
+        rng_shifts = np.random.default_rng(seed=seed)
 
         with h5py.File(
             self.pipes_dir
@@ -512,7 +567,6 @@ class MultiRegionFit:
             fit_info_str = fit_info_str.replace("float", "np.float")
             fit_info_str = fit_info_str.replace("np.np.", "np.")
             fit_instructions = eval(fit_info_str)
-            n_fit_comps = test_post["samples2d"].shape[1]
             n_post_samples = test_post["samples2d"].shape[0]
 
         # Try to allow for both memory and file-backed multiprocessing of
@@ -522,6 +576,12 @@ class MultiRegionFit:
         smm.start()
 
         # If we are not oversampling, we can drastically reduce the memory usage
+        # and only store the reprojected (multiregion) seg map for each beam.
+        # If the segmentation map is not aligned to the beam direct images, and
+        # we are oversampling to find the exact pixel overlap, the fastest
+        # method for generating forward-modelled spectra is to pre-calculate
+        # the segmentation map overlap for each region, and store this in a
+        # shared memory array.
         if oversamp_factor == 1:
             oversamp_seg_maps_shape = (
                 self.MB.N,
@@ -598,8 +658,7 @@ class MultiRegionFit:
             start_idx += cutout_shape
 
             beam_wcs = deepcopy(beam_cutout.direct.wcs)
-            beam_wcs.wcs.cd /= oversamp_factor
-            beam_wcs.wcs.crpix *= oversamp_factor
+            beam_wcs = grizli_utils.transform_wcs(beam_wcs, scale=oversamp_factor)
 
             oversampled[:] = reproject_interp(
                 (self.regions_seg_map, self.regions_seg_wcs),
@@ -634,13 +693,20 @@ class MultiRegionFit:
                 )
                 pool.starmap(multi_fn, enumerate(self.regions_seg_ids))
 
+        # Avoid any nan-related problems later
         oversamp_seg_maps[~np.isfinite(oversamp_seg_maps)] = 0
 
+        # The total number of templates
         NTEMP = self.n_regions * n_samples
+        if n_shifted > 0:
+            NTEMP += self.n_regions * n_shifted * n_shifted_samples
         num_stacks = len([*beam_info.keys()])
         stacked_shape = np.nansum([np.prod(v["2d_shape"]) for v in beam_info.values()])
         temp_offset = A.shape[0] - self.MB.N + num_stacks
 
+        # This is the large array of models. Each row corresponds to a
+        # (probably) unique template, forward-modelled across all beams,
+        # and flattened.
         stacked_A_shape = (temp_offset + NTEMP, stacked_shape)
 
         if memmap:
@@ -669,11 +735,16 @@ class MultiRegionFit:
             off = 0.04
         else:
             off = 0.0
-        stacked_scif = np.zeros(stacked_shape)
 
+        # There are very few scenarios in which it makes sense to use the
+        # individual beams for fitting. The computational requirements are
+        # already considerable, and for GLASS-JWST, not stacking would mean ~6x
+        # more memory, and at least that in computation time.
+        stacked_scif = np.zeros(stacked_shape)
         stacked_ivarf = np.zeros(stacked_shape)
         stacked_weightf = np.zeros(stacked_shape)
         stacked_fit_mask = np.zeros(stacked_shape, dtype=bool)
+
         start_idx = 0
         for k_i, (k, v) in enumerate(beam_info.items()):
             stack_idxs = np.r_["0,2", *v["flat_slice"]]
@@ -712,15 +783,14 @@ class MultiRegionFit:
 
         stacked_fit_mask &= np.isfinite(stacked_scif)
 
-        coeffs_tracker = []
-        chi2_tracker = []
-
-        output_table_path = out_dir / (
+        # TODO: make the output name a parameter?
+        self.output_table_path = out_dir / (
             f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
             f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
         )
 
-        # !! This can be placed outside the iteration loop
+        # The function to produce the templates - only a couple of
+        # parameters change on each iteration.
         stacked_fn = partial(
             self._gen_stacked_templates_from_pipes,
             shared_seg_name=(
@@ -734,15 +804,17 @@ class MultiRegionFit:
             ),
             models_shape=stacked_A_shape,
             posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
-            n_samples=n_samples,
+            n_samples=n_samples + (n_shifted * n_shifted_samples),
             spec_wavs=spec_wavs,
             beam_info=beam_info,
             temp_offset=temp_offset,
             cont_only=False,
             rm_line=None,
             memmap=memmap,
+            n_shifted_rows=n_shifted_samples,
         )
 
+        # These column names should be fixed for all objects
         init_col_names = [
             "iteration",
             "chi2",
@@ -750,59 +822,83 @@ class MultiRegionFit:
             "solve_nnls_iters",
             "nnls_tol",
             "rows",
+            "id_shifts",
+            "n_shifted_samples",
         ]
 
-        if output_table_path.is_file() and not overwrite:
-            output_table = Table.read(output_table_path, format="fits")
+        # Construct a zero-length table if it doesn't already exist
+        if self.output_table_path.is_file() and not overwrite:
+            output_table = Table.read(self.output_table_path, format="fits")
         else:
             output_table = Table(
                 [
                     [0],
-                    *np.zeros((len(init_col_names) - 2, 1)),
+                    *np.zeros((len(init_col_names) - 4, 1)),
                     np.zeros((1, n_samples), dtype=int),
+                    np.zeros((1, n_shifted), dtype=int),
+                    [0],
                     *np.zeros((temp_offset, 1)),
-                    *np.zeros((self.n_regions, 1, n_samples)),
+                    *np.zeros(
+                        (self.n_regions, 1, n_samples + (n_shifted * n_shifted_samples))
+                    ),
                 ],
                 names=init_col_names
                 + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
                 + [f"bin_{p}" for p in self.regions_phot_cat["bin_id"]],
-                dtype=[int, float, int, int, float, int]
+                dtype=[int, float, int, int, float, int, int, int]
                 + [float] * temp_offset
                 + [float] * self.n_regions,
             )
             output_table = output_table[:0]
 
+        # Check if the table length matches the expected number of iterations
         prev_iters = len(output_table)
         if prev_iters < n_iters + int(TWO_STAGE):
 
+            # If there are previous iterations, sample from the RNGs so the
+            # seed order is preserved
             for x in np.arange(prev_iters):
                 rows = rng.choice(
                     np.arange(n_post_samples, dtype=int),
                     size=n_samples,
                     replace=False,
                 )
+                id_shifts = rng_shifts.choice(
+                    np.arange(self.n_regions, dtype=int), size=n_shifted, replace=False
+                )
 
             remaining_iters = n_iters + int(TWO_STAGE) - prev_iters
 
-            output_table.write(output_table_path, overwrite=True, format="fits")
+            output_table.write(self.output_table_path, overwrite=True, format="fits")
 
             iterations = np.arange(prev_iters, n_iters + int(TWO_STAGE))
 
             for iteration in iterations:
+
+                # On the final iteration, reuse the samples from the current
+                # best-fit solution
                 if TWO_STAGE and (iteration == iterations[-1]):
 
                     best_iter = np.argmin(output_table["chi2"])
 
                     rows = [int(s) for s in output_table["rows"][best_iter]]
+                    id_shifts = [int(s) for s in output_table["id_shifts"][best_iter]]
                 else:
                     rows = rng.choice(
                         np.arange(n_post_samples, dtype=int),
                         size=n_samples,
                         replace=False,
                     )
+                    id_shifts = rng_shifts.choice(
+                        np.arange(self.n_regions, dtype=int),
+                        size=n_shifted,
+                        replace=False,
+                    )
+
                 print(f"Iteration {iteration}, {rows=}")
                 t0 = time()
 
+                # Generate the forward-modelled spectra
                 print("Generating models...")
                 with multiprocessing.Pool(
                     processes=cpu_count,
@@ -817,16 +913,22 @@ class MultiRegionFit:
                         pool.apply_async(
                             stacked_fn,
                             (s_i, s),
-                            kwds={"rows": rows},
+                            kwds={"rows": rows, "id_shifts": id_shifts},
                         )
                     pool.close()
                     pool.join()
 
                 t1 = time()
                 print(f"Generating models... DONE {t1-t0:.3f}s")
+
+                # Remove any negative or zero templates
                 ok_temp = np.sum(stacked_A, axis=1) > 0
 
-                stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::100])
+                # We need to remove duplicate templates so the NNLS solvers can
+                # actually converge. Until such time as np.unique implements
+                # a hash map to allow for speeding up `return_index`, we just
+                # skip over every 99 pixels
+                stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::99])
                 # np.unique() finds identical items in a raveled array. To make it
                 # see each row as a single item, we create a view of each row as a
                 # byte string of length itemsize times number of columns in `ar`
@@ -837,20 +939,23 @@ class MultiRegionFit:
                 unique_temp = np.isin(np.arange(stacked_A.shape[0]), unique_idxs)
                 del stacked_A_contig
 
+                # Select only the unique templates
                 ok_temp &= unique_temp
 
                 out_coeffs = np.zeros(stacked_A.shape[0])
 
+                # Transpose the template array
                 stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
 
                 stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
                 print(
                     f"Array size reduced from {stacked_A.shape} to "
                     f"{stacked_Ax.shape[::-1]} ("
-                    f"{stacked_Ax.shape[0]/stacked_A.shape[-1]:.1%} of original)"
+                    f"{np.prod(stacked_Ax.shape)/np.prod(stacked_A.shape[-1]):.1%} of original)"
                 )
                 print("NNLS fitting...")
 
+                # Change the max iters and tolerance for the final iteration
                 if TWO_STAGE and (iteration == iterations[-1]):
                     print("Final iteration")
                     _nnls_i = nnls_iters[1]
@@ -858,11 +963,13 @@ class MultiRegionFit:
                 else:
                     _nnls_i = nnls_iters[0]
                     _nnls_t = nnls_tol[0]
-                print(_nnls_i, _nnls_t)
 
+                # Allow for background fitting by including an offset
                 y = stacked_scif[stacked_fit_mask] + off
                 y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
 
+                # Three different methods of fitting, each with different call
+                # signatures and return values
                 if nnls_method == "scipy":
 
                     coeffs, rnorm, info = scipy.optimize._nnls._nnls(
@@ -910,16 +1017,22 @@ class MultiRegionFit:
                         state.iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
                         _nnls_t,
                         rows,
+                        id_shifts,
+                        n_shifted_samples,
                         *out_coeffs[:temp_offset],
                         *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
                     ]
                 )
-                output_table.write(output_table_path, overwrite=True)
+                output_table.write(self.output_table_path, overwrite=True)
                 print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
+
+                # Reset the template array
                 stacked_A[temp_offset:].fill(0.0)
 
             del stacked_Ax
 
+        # There must be a better way to obtain the coefficients, but
+        # slicing tables is not entirely straightforward
         best_iter = np.argmin(output_table["chi2"])
         out_coeffs = np.asarray(
             [
@@ -928,13 +1041,18 @@ class MultiRegionFit:
                 for i in np.atleast_1d(d)
             ]
         ).ravel()
+
+        # Repopulate the background parameters for MultiBeam
         if fit_background:
             for k_i, (k, v) in enumerate(beam_info.items()):
                 for ib in v["list_idx"]:
                     self.MB.beams[ib].background = out_coeffs[k_i]
 
         best_rows = [int(s) for s in output_table["rows"][best_iter]]
+        best_id_shifts = [int(s) for s in output_table["id_shifts"][best_iter]]
 
+        # Largely unmodified from the original grizli code. Included within
+        # this particular class method to avoid dealing with SharedMemory
         if save_stacks:
             print("Generating models...")
             with multiprocessing.Pool(
@@ -950,7 +1068,7 @@ class MultiRegionFit:
                     pool.apply_async(
                         stacked_fn,
                         (s_i, s),
-                        kwds={"rows": best_rows},
+                        kwds={"rows": best_rows, "id_shifts": best_id_shifts},
                         error_callback=print,
                         # error_callback=traceback.format_exc,
                     )
@@ -975,7 +1093,11 @@ class MultiRegionFit:
                     pool.apply_async(
                         stacked_fn,
                         (s_i, s),
-                        kwds={"rows": best_rows, "cont_only": True},
+                        kwds={
+                            "rows": best_rows,
+                            "id_shifts": best_id_shifts,
+                            "cont_only": True,
+                        },
                         # error_callback=print,
                     )
                 pool.close()
@@ -1082,14 +1204,13 @@ class MultiRegionFit:
                 ),
                 models_shape=flat_beam_models.shape,
                 posterior_dir=str(self.pipes_dir / "posterior" / self.run_name),
-                n_samples=n_samples,
                 spec_wavs=spec_wavs,
                 beam_info=beam_info,
-                temp_offset=temp_offset,
                 cont_only=False,
                 rows=best_rows,
                 coeffs=output_table[best_iter],
                 memmap=memmap,
+                n_shifted_rows=n_shifted_samples,
             )
 
             for l_i, l_v in enumerate(use_lines):
@@ -1110,7 +1231,10 @@ class MultiRegionFit:
                         pool.apply_async(
                             beams_fn,
                             args=(s_i, s),
-                            kwds={"rm_line": l_v["cloudy"]},
+                            kwds={
+                                "rm_line": l_v["cloudy"],
+                                "id_shifts": best_id_shifts,
+                            },
                             error_callback=print,
                         )
                     pool.close()

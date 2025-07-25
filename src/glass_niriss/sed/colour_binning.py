@@ -114,6 +114,7 @@ def colour_aggregate(
             curr_sn = np.nansum(m_S[curr_bin_idxs]) / np.sqrt(
                 np.nansum(m_N[curr_bin_idxs] ** 2)
             )
+            # print ("BEGIN", avail_idxs.any(), np.nansum(avail_idxs), curr_sn)
             if curr_sn >= target_sn:
                 new_bin_id = np.nanmax(bin_map) + 1
                 for c in curr_bin_idxs:
@@ -126,6 +127,9 @@ def colour_aggregate(
                 except Exception as e:
                     print(e)
                     break
+            if not avail_idxs.any():
+                break
+            # print ("MID", np.nansum(avail_idxs), avail_idxs.any())
 
             d, poss_idxs = kd.query(
                 m_C[curr_bin_idxs[-1]], k=len(avail_idxs), workers=-1
@@ -134,8 +138,17 @@ def colour_aggregate(
             filtered = avail_idxs[poss_idxs]
             filtered_idxs = poss_idxs[filtered]
 
+            # try:
             curr_bin_idxs.append(filtered_idxs[0])
+            # except:
+            #     print (filtered_idxs)
+            #     print (poss_idxs)
+            #     print (avail_idxs)
+            #     print (np.nansum(avail_idxs))
+            #     print (avail_idxs.any())
+            #     print ("testing")
             avail_idxs[filtered_idxs[0]] = False
+            # print ("END", np.nansum(avail_idxs), avail_idxs.any())
 
             progress.update()
 

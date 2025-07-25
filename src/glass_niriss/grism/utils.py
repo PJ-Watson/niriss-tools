@@ -258,7 +258,7 @@ def gen_stacked_beams(
             new_beam.direct.data["REF"] = outdir
             new_beam.direct.header.update(grizli_utils.to_header(new_beam.direct.wcs))
             new_beam.grism.header.update(grizli_utils.to_header(new_beam.grism.wcs))
-            # print (dir(new_beam))
+
             new_beam.beam = GrismDisperser(
                 id=mb.id,
                 direct=outdir,
@@ -285,10 +285,6 @@ def gen_stacked_beams(
                 yoffset=0.0,
             )
             new_beam.beam.compute_model()
-            print(new_beam.beam.model.shape)
-            print(outsci.shape)
-            print(outvar.shape)
-            print(outcon.shape)
 
             new_beam.modelf = new_beam.beam.modelf
             new_beam.model = new_beam.beam.modelf.reshape(new_beam.beam.sh_beam)
@@ -300,8 +296,7 @@ def gen_stacked_beams(
                 min_sens=mb.min_sens,
                 mask_resid=mb.mask_resid,
             )
-            # print (dir(new_beam))
-            # exit()
+
             new_beam_list.append(new_beam)
 
     new_multibeam = MultiBeam(
@@ -451,3 +446,78 @@ def align_direct_images(
             new_info_dict[k][img_type] = str(out_dir / Path(v[img_type]).name)
 
     return new_info_dict
+
+
+def gen_psf(multibeam: MultiBeam) -> dict:
+    """
+    Generate a PSF aligned with the direct image in extracted beams.
+
+    The PSF matches the rotation of the direct imaging using the ``"PA_V3"``
+    header keyword.
+
+    Parameters
+    ----------
+    multibeam : MultiBeam
+        The grizli-extracted multiple beams object.
+
+    Returns
+    -------
+    dict
+        A dictionary with keys corresponding to each unique grism and filter
+        combination, and values of the PSF image.
+    """
+
+    import stpsf
+    from drizzlepac.astrodrizzle import ablot
+
+    psf_aligned_images = {}
+
+    for i, (beam_cutout, cutout_shape) in enumerate(
+        zip(multibeam.beams, multibeam.Nflat)
+    ):
+        beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
+        if not beam_name in psf_aligned_images:
+            header = beam_cutout.direct.header
+            beam_wcs = beam_cutout.direct.wcs
+            inst = stpsf.instrument(header["INSTRUME"])
+            inst.set_position_from_aperture_name("NIS_CEN")
+            inst.filter = header["PUPIL"]
+            dateobs = astropy.time.Time(
+                header["DATE-BEG"]
+            )  # + 'T' + header['TIME-OBS'])
+            inst.load_wss_opd_by_date(
+                dateobs, verbose=False, plot=False, choice="closest"
+            )
+            psf = inst.calc_psf(
+                fov_pixels=np.nanmax(beam_wcs._naxis) * 2 + 1,
+            )
+            psf_data = psf["DET_DIST"].data
+            psf_wcs = WCS(psf["DET_DIST"])
+            psf_wcs.wcs.crpix = (np.asarray(psf_data.shape) + 1) / 2
+            psf_wcs.wcs.crval = [multibeam.ra, multibeam.dec]
+            rotation_angle_rad = np.radians(header["PA_V3"] - 360)
+            psf_wcs.wcs.cd = (
+                np.array(
+                    [
+                        [np.cos(rotation_angle_rad), -np.sin(rotation_angle_rad)],
+                        [np.sin(rotation_angle_rad), np.cos(rotation_angle_rad)],
+                    ]
+                )
+                * (inst.pixelscale * u.arcsec).to(u.deg).value
+            )
+            psf_wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+
+            psf_wcs.pscale = grizli_utils.get_wcs_pscale(psf_wcs)
+
+            blotted = ablot.do_blot(
+                psf_data.astype(np.float32),
+                psf_wcs,
+                beam_wcs,
+                1,
+                coeffs=True,
+                sinscl=1.0,
+                stepsize=1,
+            )
+            psf_aligned_images[beam_name] = blotted
+
+    return psf_aligned_images

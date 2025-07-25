@@ -484,7 +484,7 @@ def regen_catalogue(
 
     drz_im = fits.open(drz_file)
     # data = drz_im[0].data.byteswap().newbyteorder()
-    data = drz_im[0].data.view(drz_im[0].data.dtype.newbyteorder())
+    data = drz_im[0].data.view(drz_im[0].data.dtype.newbyteorder()).byteswap()
 
     logstr = f"make_SEP_catalog: {drz_file} weight={weight_file} ({WEIGHT_TYPE})"
     utils.log_comment(utils.LOGFILE, logstr, verbose=verbose, show_date=True)
@@ -522,7 +522,7 @@ def regen_catalogue(
     if (weight_file is not None) & need_err:
         wht_im = fits.open(weight_file)
         # wht_data = wht_im[0].data.byteswap().newbyteorder()
-        wht_data = wht_im[0].data.view(wht_im[0].data.dtype.newbyteorder())
+        wht_data = wht_im[0].data.view(wht_im[0].data.dtype.newbyteorder()).byteswap()
 
         if WEIGHT_TYPE == "VARIANCE":
             err_data = np.sqrt(wht_data)
@@ -653,10 +653,7 @@ def regen_catalogue(
                 segmentation_map=True,
                 **detection_params,
             )
-            import matplotlib.pyplot as plt
 
-            plt.imshow(seg)
-            plt.show()
             objects = Table(objects)
 
             objects["number"] = np.arange(len(objects), dtype=np.int32) + 1
@@ -693,8 +690,8 @@ def regen_catalogue(
             print(source_cat.bbox_xmin[0])
             print(source_cat.bbox_xmax[0])
 
-            for p in source_cat.properties:
-                print(p, getattr(source_cat[0], p))
+            # for p in source_cat.properties:
+            #     print(p, getattr(source_cat[0], p))
 
             rename_cols = {
                 "label": "number",
@@ -778,7 +775,6 @@ def regen_catalogue(
             tab = tab[np.isfinite(tab[c])]
         # for c in ["x", "y", "x_image", "y_image", "theta"]:
         #     tab = tab[np.isfinite(tab[c])]
-        print(tab.colnames)
         # Segmentation
         seg[mask] = 0
 
