@@ -77,17 +77,18 @@ if __name__ == "__main__":
     import matplotlib.backends.backend_pdf
 
     pdf = matplotlib.backends.backend_pdf.PdfPages(
-        save_dir / f"seyfert_candidates_check.pdf"
+        save_dir / f"cluster_gals_cutouts.pdf"
     )
 
     idx = (
-        (ext_cat["Z_NIRISS"] >= 1.0)
-        & (ext_cat["Z_NIRISS"] < 2.3)
+        (ext_cat["Z_NIRISS"] >= 0.29)
+        & (ext_cat["Z_NIRISS"] < 0.33)
         & (ext_cat["Z_FLAG"] >= 4)
-        & (ext_cat["flux_Ha"] / ext_cat["err_Ha"] >= 5)
-        & (ext_cat["flux_OIII"] / ext_cat["err_OIII"] >= 5)
-    ) | (np.isin(ext_cat["ID_NIRISS"], [321, 1332]))
+        # & (ext_cat["flux_Ha"] / ext_cat["err_Ha"] >= 5)
+        # & (ext_cat["flux_OIII"] / ext_cat["err_OIII"] >= 5)
+    )  # | (np.isin(ext_cat["ID_NIRISS"], [321, 1332]))
     print(len(ext_cat[idx]))
+    # exit()
 
     overdens_cat = ext_cat[idx]  #
     overdens_cat.sort("Z_NIRISS")
@@ -223,22 +224,22 @@ if __name__ == "__main__":
                     xycoords="axes fraction",
                     # rotation="vertical"
                 )
-                an = ax[1].annotate(
-                    rf"$\log(\rm{{S}}II/\rm{{H}}\alpha)={np.log10(row["flux_SII"]/row["flux_Ha"]):.3f}$",
-                    (0.95, 0.7),
-                    ha="right",
-                    va="top",
-                    xycoords="axes fraction",
-                    # rotation="vertical"
-                )
-                an = ax[1].annotate(
-                    rf"$\log(\rm{{O}}III/\rm{{H}}\beta)={np.log10(row["flux_OIII"]/row["flux_Hb"]):.2f}$",
-                    (0.95, 0.6),
-                    ha="right",
-                    va="top",
-                    xycoords="axes fraction",
-                    # rotation="vertical"
-                )
+                # an = ax[1].annotate(
+                #     rf"$\log(\rm{{S}}II/\rm{{H}}\alpha)={np.log10(row["flux_SII"]/row["flux_Ha"]):.3f}$",
+                #     (0.95, 0.7),
+                #     ha="right",
+                #     va="top",
+                #     xycoords="axes fraction",
+                #     # rotation="vertical"
+                # )
+                # an = ax[1].annotate(
+                #     rf"$\log(\rm{{O}}III/\rm{{H}}\beta)={np.log10(row["flux_OIII"]/row["flux_Hb"]):.2f}$",
+                #     (0.95, 0.6),
+                #     ha="right",
+                #     va="top",
+                #     xycoords="axes fraction",
+                #     # rotation="vertical"
+                # )
                 # an = ax[1].annotate(
                 #     rf"$\rm{{O}}III/\rm{{O}}II={row["flux_OIII"]/row["flux_OII"]:.3f}$",
                 #     (0.95, 0.5),
@@ -250,7 +251,7 @@ if __name__ == "__main__":
 
                 an = ax[1].annotate(
                     rf"{row["RA"]:.5f} {row["DEC"]:.5f}",
-                    (0.95, 0.5),
+                    (0.95, 0.7),
                     ha="right",
                     va="top",
                     xycoords="axes fraction",

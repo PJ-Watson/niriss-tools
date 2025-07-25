@@ -48,9 +48,7 @@ if __name__ == "__main__":
         ]
     )
     obj_list_full = np.array([1316, 3062, 754, 345, 3394, 1223])
-    obj_list_class = np.array(
-        ["SECURE"] * 3 + ["TENTATIVE"] + ["SECURE"] + ["UNDETERMINED"]
-    )
+    obj_list_class = np.array(["SECURE"] * 4 + ["TENTATIVE"] + ["UNDETERMINED"])
     print(obj_list_class)
     # obj_list_full = obj_list_full[0]
     # offset = 8
@@ -77,8 +75,8 @@ if __name__ == "__main__":
         constrained_layout=True,
     )
     fig.set_size_inches(
-        plot_utils.aanda_textwidth * 0.9,
-        plot_utils.aanda_columnwidth * len(obj_list_full.ravel()) * 0.4,
+        plot_utils.aanda_textwidth * 0.95,
+        plot_utils.aanda_columnwidth * len(obj_list_full.ravel()) * 0.42,
     )
     # subfigs = fig.subfigures(*obj_list_full.shape)
     subfigs = fig.subfigures(len(obj_list_full.ravel()))
@@ -209,6 +207,7 @@ if __name__ == "__main__":
                 # hdul.data["chi2"] / hdul.header["DOF"],
                 # ((hdul.data['chi2']-c2min)/scale_nu)
                 np.log10(hdul.data["pdf"]),
+                c="purple",
             )
             pzmax = np.log10(hdul.data["pdf"]).max()
             ax_z.set_ylim(pzmax - 6, pzmax + 0.9)
@@ -338,22 +337,25 @@ if __name__ == "__main__":
         #     **hatch_kwargs,
         #     label="Sens. Cutoff" if i == 2 else "_",
         # )
-        for cutoff_edges in [
-            [axs_oned.get_xlim()[0], niriss_filter_sens["F115W"][0]],
+        for c_i, cutoff_edges in enumerate(
             [
-                niriss_filter_sens["F115W"][-1],
-                niriss_filter_sens["F150W"][0],
-            ],
-            [
-                niriss_filter_sens["F150W"][-1],
-                niriss_filter_sens["F200W"][0],
-            ],
-            [niriss_filter_sens["F200W"][-1], axs_oned.get_xlim()[-1]],
-        ]:
+                [axs_oned.get_xlim()[0], niriss_filter_sens["F115W"][0]],
+                [
+                    niriss_filter_sens["F115W"][-1],
+                    niriss_filter_sens["F150W"][0],
+                ],
+                [
+                    niriss_filter_sens["F150W"][-1],
+                    niriss_filter_sens["F200W"][0],
+                ],
+                [niriss_filter_sens["F200W"][-1], axs_oned.get_xlim()[-1]],
+            ]
+        ):
             axs_oned.fill_betweenx(
                 [-1, 1.25 * max_ylim],
                 *cutoff_edges,
                 **hatch_kwargs,
+                label=r"$<50\%$ Sensitivity" if c_i == 0 else "",
             )
         axs_oned.set_ylabel(
             r"$f_{\lambda}\ [10^{-19}\,\rm{erg}/\rm{s}/\rm{cm}^{2}/\AA]$",
@@ -361,7 +363,7 @@ if __name__ == "__main__":
         axs_oned.set_xlabel(r"Observed Wavelength ($\mu$m)")
         if o == 0:
             subfigs.ravel()[o].legend(
-                bbox_to_anchor=(0.6, 1), loc="lower center", ncol=3
+                bbox_to_anchor=(0.6, 1), loc="lower center", ncol=4
             )
         # axs_oned.fill_betweenx(
         #     [-1, 100],
@@ -457,7 +459,7 @@ if __name__ == "__main__":
     # fig.patch.set_alpha(0.0)
 
     plt.savefig(
-        save_dir / "redshift_quality_examples.pdf", dpi=600, bbox_inches="tight"
+        save_dir / "redshift_quality_examples_rev1.pdf", dpi=600, bbox_inches="tight"
     )
 
     # # fig.get_layout_engine().set(w_pad=0 / 72, h_pad=0 / 72, hspace=0,

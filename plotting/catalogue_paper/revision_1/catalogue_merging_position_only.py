@@ -23,11 +23,11 @@ if __name__ == "__main__":
         grizli_dir
         / "Extractions_v4"
         / "catalogues"
-        / "stage_6_output_internal_phot.fits"
+        / "stage_7_output_internal_phot.fits"
     )
 
-    z_cat_name = "stage_6_output_internal_phot_zprev.fits"
-    stage_cat_dir = grizli_dir / "Extractions_v4" / "catalogues" / "stage_6"
+    z_cat_name = "stage_7_output_internal_phot_zprev.fits"
+    stage_cat_dir = grizli_dir / "Extractions_v4" / "catalogues" / "stage_7"
     stage_cat_dir.mkdir(exist_ok=True, parents=True)
 
     if not (stage_cat_dir / z_cat_name).is_file():
@@ -488,7 +488,7 @@ if __name__ == "__main__":
         )
 
     try:
-        aanda_cat = Table.read(stage_cat_dir / "a2744_spec_cat_niriss_20250401.fits")
+        aanda_cat = Table.read(stage_cat_dir / "a2744_spec_cat_niriss_20250508.fits")
     except:
         aanda_cols = [
             "ID_NIRISS",
@@ -510,7 +510,7 @@ if __name__ == "__main__":
         aanda_cat = niriss_ext_cat[aanda_cols]
         aanda_cat.meta["EXTVER"] = "GLASS-JWST ERS"
         aanda_cat.write(
-            stage_cat_dir / "a2744_spec_cat_niriss_20250401.fits", overwrite=True
+            stage_cat_dir / "a2744_spec_cat_niriss_20250508.fits", overwrite=True
         )
     # # print (niriss_ext_cat)
     # niriss_ext_cat.write(stage_cat_dir / "full_external_em_lines.fits", overwrite=True)

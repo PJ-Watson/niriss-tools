@@ -114,7 +114,7 @@ if __name__ == "__main__":
         "hatch": "//",
         "linewidth": 0,
         "zorder": 3,
-        "hatchcolor": hatch_colour,
+        # "hatchcolor" : hatch_colour
     }
     # hatch_colour = (0,0,0,0.3)
 
@@ -127,7 +127,7 @@ if __name__ == "__main__":
         "hatch": "//",
         # "linewidth": 1,
         "zorder": 3,
-        "hatchcolor": hatch_colour,
+        # "hatchcolor" : hatch_colour
     }
 
     # obj_z = None
@@ -242,9 +242,9 @@ if __name__ == "__main__":
     line_dict = {
         r"Ly$\alpha$": 1215.24,
         # "MgII": 2799.12,
-        "OII": 3728.4835,
+        r"$\left[\ion{O}{ii}\right]$": 3728.4835,
         "OIII-4958": 4960.295,
-        "OIII": 5008.24,
+        r"$\left[\ion{O}{iii}\right]$": 5008.24,
         # "OIII" : 4984.2675,
         r"H$\beta$": 4862.68,
         r"H$\alpha$": 6564.61,
@@ -369,7 +369,12 @@ if __name__ == "__main__":
                     if l != "OIII-4958":
                         axs[2, i + 1].annotate(
                             rf"{l}",
-                            xy=(line_w + 0.005 - (0.005 if l == "OIII" else 0), 1.1),
+                            xy=(
+                                line_w
+                                + 0.005
+                                + (0.005 if l == r"$\left[\ion{O}{ii}\right]$" else 0),
+                                1.1 + (0.05 if "ion" in l else 0),
+                            ),
                             xycoords=axs[2, i + 1].get_xaxis_transform(),
                             # xytext=(0.855, ylim + 0.05),
                             # textcoords="data",
@@ -396,106 +401,6 @@ if __name__ == "__main__":
 
     fig.patch.set_alpha(0.0)
 
-    plt.savefig(save_dir / "niriss_beams_example.svg", dpi=600)
-    plt.savefig(save_dir / "niriss_beams_example.pdf", dpi=600)
-
-    # import fpdf
-
-    # svg = fpdf.svg.SVGObject.from_file(save_dir / "niriss_beams_example.svg")
-
-    # pdf = fpdf.FPDF(unit="pt", format=(svg.width, svg.height))
-    # pdf.add_page()
-    # svg.draw_to_page(pdf)
-
-    # pdf.output(save_dir / "my_file.pdf")
-
-    # fig.get_layout_engine().set(w_pad=0 / 72, h_pad=0 / 72, hspace=0,
-    #                         wspace=0)
-    # fig.subplots_adjust(wspace=0.3, hspace=0.3)
+    # plt.savefig(save_dir / "niriss_beams_example.svg", dpi=600)
+    plt.savefig(save_dir / "niriss_beams_example_rev1.pdf", dpi=600)
     plt.show()
-    # # gs = fig.add_gridspec(3, 3)#, height_ratios=(1, 2))
-    # # ax = fig.add_subplot(gs[1, 0])
-
-    # z_min = 0
-    # z_max = 3
-    # z_range = np.linspace(z_min, z_max, 100)
-
-    # # for k, v in line_dict.items():
-    # #     ax.plot(z_range, (1 + z_range) * v)
-
-    # # for k, v in niriss_info.items():
-    # #     ax.fill_between(z_range, v[0], v[1], color="k", alpha=0.4, edgecolor="none")
-    # for k, v in line_dict.items():
-    #     ax.plot((1 + z_range) * v / 1e4, z_range, c="k", linewidth=0.5)
-
-    # for k, v in niriss_info.items():
-    #     ax.fill_betweenx(z_range, v[0], v[1], color="k", alpha=0.2, edgecolor="none")
-
-    # ax.set_xlim(0.95, 2.300)
-    # ax.set_ylim(z_min, z_max)
-    # ax.axhline(1.1, c="k", linestyle=":")
-    # ax.axhline(1.35, c="k", linestyle=":")
-    # ax.axhline(1.9, c="k", linestyle=":")
-    # ax.axhline(0.3064, c="k", linestyle=":", label="Cluster")
-
-    # # hist = partial(plot_utils.plot_hist, bins=np.arange(16.5, 33.5, 0.5), ax=ax)
-    # # # print (np.nanmin(v1_cat["MAG_AUTO"]), np.nanmax(v1_cat["MAG_AUTO"])
-
-    # # hist(v1_cat["MAG_AUTO"], label="Full Sample")
-    # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] > 0], ax=ax, label="Extracted")
-    # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 4], ax=ax, label="First Pass")
-    # # hist(v1_cat["MAG_AUTO"][v1_cat["V1_CLASS"] >= 5], ax=ax, label="Placeholder")
-
-    # ax.set_xlabel(r"Observed Wavelength ($\mu$m)")
-    # ax.set_ylabel(r"$z$")
-    # # ax.legend()
-
-    # for k, v in line_dict.items():
-    #     for k_n, v_n in niriss_info.items():
-    #         # low = v_n[0]/v -1
-    #         print(f"{k}: {k_n}={v_n[0]/v-1:.3f},{v_n[1]/v-1:.3f}")
-
-    # ax_filts = fig.add_subplot(gs[0], sharex=ax)
-    # plt.setp(ax_filts.get_xticklabels(), visible=False)
-    # # for f in filter_dir.glob("*.txt"):
-    # for c, f in zip(["blue", "green", "red"], niriss_info.keys()):
-    #     print(f)
-    #     filt_tab = Table.read(filter_dir / f"NIRISS_{f}.txt", format="ascii")
-    #     # print (filt_tab)
-    #     filt_tab["PCE"][filt_tab["PCE"] < 1e-3] = np.nan
-    #     ax_filts.plot(filt_tab["Wavelength"], filt_tab["PCE"], c=c)
-    #     # half_sens_idx = [
-    #     #     np.nanargmax(filt_tab["PCE"] <= 0.5 * np.nanmax(filt_tab["PCE"])),
-    #     #     np.nanargmax(filt_tab["PCE"] >= 0.5 * np.nanmax(filt_tab["PCE"]))
-    #     # ]
-    #     half_sens_idx = np.argwhere(filt_tab["PCE"] >= 0.5 * np.nanmax(filt_tab["PCE"]))
-    #     #     np.nanargmax(filt_tab["PCE"] >= 0.5 * np.nanmax(filt_tab["PCE"]))
-    #     # ]
-    #     # print (half_sens_idx)
-
-    #     ax_filts.fill_betweenx(
-    #         [0, 1],
-    #         filt_tab["Wavelength"][half_sens_idx[0]],
-    #         filt_tab["Wavelength"][half_sens_idx[-1]],
-    #         color=c,
-    #         alpha=0.2,
-    #         edgecolor="none",
-    #     )
-    #     ax.fill_betweenx(
-    #         z_range,
-    #         filt_tab["Wavelength"][half_sens_idx[0]],
-    #         filt_tab["Wavelength"][half_sens_idx[-1]],
-    #         color=c,
-    #         alpha=0.2,
-    #         edgecolor="none",
-    #     )
-    #     # print(
-    #     #     filt_tab["Wavelength"][half_sens_idx[0]],
-    #     #     filt_tab["Wavelength"][half_sens_idx[-1]],
-    #     # )
-    # ax_filts.set_ylabel(r"Throughput")
-    # ax_filts.set_ylim(0, 1)
-
-    # plt.savefig(save_dir / "svg" / "wavelength_coverage.svg", dpi=600)
-
-    # plt.show()

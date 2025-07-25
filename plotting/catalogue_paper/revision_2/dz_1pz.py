@@ -399,15 +399,15 @@ if __name__ == "__main__":
     # axs[1].set_ylim(lims)
     #
     # plt.subplots_adjust(wspace=0, hspace=0)
-    for a in axs.flatten():
-        a.grid(
-            # which="both",
-            color="k",
-            alpha=0.05,
-            zorder=-1,
-        )
+    # for a in axs.flatten():
+    #     a.grid(
+    #         # which="both",
+    #         color="k",
+    #         alpha=0.05,
+    #         zorder=-1,
+    #     )
 
-    plt.savefig(save_dir / "dz_1pz.pdf")
+    plt.savefig(save_dir / "dz_1pz_rev2.pdf")
     # for k, v in line_dict.items():
     #     for k_n, v_n in niriss_info.items():
     #         # low = v_n[0]/v -1

@@ -29,7 +29,7 @@ if __name__ == "__main__":
     )
     fig.set_size_inches(
         plot_utils.aanda_textwidth * 0.8,
-        plot_utils.aanda_columnwidth * len(obj_list_full) / 1.3,
+        plot_utils.aanda_columnwidth * len(obj_list_full) / 1.15,
     )
     subfigs = fig.subfigures(len(obj_list_full), 1)
 
@@ -58,6 +58,7 @@ if __name__ == "__main__":
             # sharey="row",
             width_ratios=[1, 3, 1, 3],
             # height_ratios=[1, 1, 2],
+            gridspec_kw={"hspace": 0.01, "wspace": 0.01},
         )
         for i, (obj_id, (obj_filter, pa)) in enumerate(obj_list.items()):
             try:
@@ -186,6 +187,6 @@ if __name__ == "__main__":
                 pass
     fig.patch.set_alpha(0.0)
 
-    plt.savefig(save_dir / "beam_quality_examples.pdf", dpi=600)
+    plt.savefig(save_dir / "beam_quality_examples_rev1.pdf", dpi=600)
 
     plt.show()
