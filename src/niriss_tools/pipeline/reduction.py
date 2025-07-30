@@ -6,6 +6,7 @@ import os
 from os import PathLike
 from pathlib import Path
 
+import astropy
 import numpy as np
 
 
@@ -102,7 +103,7 @@ def run_det1(uncal_path: PathLike, output_dir: PathLike, **kwargs):
 
 def gen_assocs(raw_output_dir: PathLike, field_name: str = "glass-a2744") -> dict:
     """
-    Generate association tables for each group of filters and grisms.
+    Generate exposure tables for each group of filters and grisms.
 
     This is particularly useful for programmes such as PASSAGE, for which
     no existing associations are available in the Dawn JWST Archive.
@@ -117,8 +118,9 @@ def gen_assocs(raw_output_dir: PathLike, field_name: str = "glass-a2744") -> dic
     Returns
     -------
     dict
-        The keys of the dict are the name of each group, and the values
-        are the association tables.
+        The keys of the dict are the name of each group (equivalent to
+        ``"assoc"`` used by `grizli.aws`), and the values are the
+        exposure tables.
     """
 
     from astropy.io import fits
@@ -183,3 +185,241 @@ def gen_assocs(raw_output_dir: PathLike, field_name: str = "glass-a2744") -> dic
                 ],
             )
     return assoc_dict
+
+
+def process_using_aws(
+    grizli_home_dir: PathLike,
+    raw_output_dir: PathLike,
+    assoc_tab_dict: dict,
+    field_name: str = "glass-a2744",
+    process_visit_kwargs: dict = {},
+    ref_wcs: astropy.wcs.WCS | None = None,
+    mosaic_pixel_scale: float = 0.03,
+    mosaic_pad: float = 6,
+    drizzle_kernel: str = "square",
+    drizzle_pixfrac: float = 0.8,
+    cutout_mosaic_kwargs: dict = {},
+):
+    """
+    Process WFSS data using the functions in `grizli.aws`.
+
+    Parameters
+    ----------
+    grizli_home_dir : PathLike
+        Directory containing the usual grizli folders, e.g. ``"Prep"``,
+        ``"visits"``.
+    raw_output_dir : PathLike
+        Where the current ``_rate.fits`` files are located.
+    assoc_tab_dict : dict
+        The keys of the dict are the name of each group of exposures,
+        and the values should be an exposure table.
+    field_name : str, optional
+        The name of the field, by default ``"glass-a2744"``.
+    process_visit_kwargs : dict, optional
+        Any additional arguments to pass to
+        `grizli.aws.visit_processor.process_visit`, by default ``{}``.
+    ref_wcs : astropy.wcs.WCS | None, optional
+        The reference WCS to be used when generating the drizzled mosaics.
+        By default None, in which case it will be calculated automatically
+        from the overlap of the individual filter images.
+    mosaic_pixel_scale : float, optional
+        The pixel scale (in arcseconds) to be used for the drizzled
+        mosaics, by default 0.03.
+    mosaic_pad : float, optional
+        The padding for the drizzled mosaics in arcseconds, by default 6.
+    drizzle_kernel : str, optional
+        The kernel to use for drizzling the mosaics, by default
+        ``"square"``.
+    drizzle_pixfrac : float, optional
+        The ``pixfrac`` used for the drizzled mosaics, by default 0.8.
+    cutout_mosaic_kwargs : dict, optional
+        Any additional arguments to pass to
+        `grizli.aws.visit_processor.cutout_mosaic`, by default ``{}``.
+    """
+
+    visit_dir = visit_dir
+    os.chdir(visit_dir)
+
+    import shutil
+
+    from grizli import utils as grizli_utils
+    from grizli.aws import visit_processor
+
+    for assoc_name, exp in assoc_tab_dict.items():
+        if not (visit_dir / assoc_name / "Prep").is_dir():
+
+            # Make all the directories
+            assoc_dir = visit_dir / assoc_name
+            (assoc_dir / "RAW").mkdir(exist_ok=True, parents=True)
+            (assoc_dir / "Persistence").mkdir(exist_ok=True, parents=True)
+            (assoc_dir / "Extractions").mkdir(exist_ok=True, parents=True)
+            (assoc_dir / "Prep").mkdir(exist_ok=True, parents=True)
+
+            # Only copy files if this visit hasn't been processed yet
+            if len([*(assoc_dir / "Prep").glob("*drz_sci.fits")]) == 0:
+                for filename in exp["dataset"]:
+                    try:
+                        shutil.copy(
+                            raw_output_dir / f"{filename}_rate.fits", assoc_dir / "RAW"
+                        )
+                    except Exception as e:
+                        print(e)
+                        print(f"{filename} not found?")
+
+    for assoc_name, tab in assoc_tab_dict.items():
+        if len([*(visit_dir / assoc_name / "Prep").glob("*drz_sci.fits")]) == 0:
+            # By default, do not clean all files afterwards
+            if not process_visit_kwargs.get("clean"):
+                process_visit_kwargs["clean"] = False
+
+            # Ensure the correct CRDS context is used, unless otherwise specified
+            if not process_visit_kwargs.get("other_args"):
+                process_visit_kwargs["other_args"] = {}
+            if not process_visit_kwargs["other_args"].get("CRDS_CONTEXT"):
+                process_visit_kwargs["other_args"]["CRDS_CONTEXT"] = os.environ[
+                    "CRDS_CONTEXT"
+                ]
+
+            if not process_visit_kwargs["other_args"].get("mosaic_drizzle_args"):
+                process_visit_kwargs["other_args"]["mosaic_drizzle_args"] = {}
+            if not process_visit_kwargs["other_args"]["mosaic_drizzle_args"].get(
+                "context"
+            ):
+                process_visit_kwargs["other_args"]["mosaic_drizzle_args"]["context"] = (
+                    os.environ["CRDS_CONTEXT"]
+                )
+
+            _ = visit_processor.process_visit(
+                assoc_name,
+                sync=False,
+                with_db=False,
+                tab=tab,
+                **process_visit_kwargs,
+            )
+        else:
+            print(f"Directory {assoc_name} found, local preprocesing complete!")
+
+    os.chdir(grizli_home_dir / "Prep")
+
+    # Symlink preprocessed exposure files here
+    import subprocess
+
+    for assoc_name in assoc_tab_dict.keys():
+        subprocess.run(f"ln -sf ../visits/{assoc_name}/Prep/*rate.fits .", shell=True)
+
+    import numpy as np
+    from astropy.wcs import WCS
+
+    files = [str(s) for s in (grizli_home_dir / "Prep").glob("*rate.fits")]
+    files.sort()
+    res = visit_processor.res_query_from_local(files=files)
+    is_grism = np.array(["GR" in filt for filt in res["filter"]])
+
+    if not ref_wcs:
+        # Mosaic WCS that contains all exposures
+        hdu = grizli_utils.make_maximal_wcs(
+            files=files,
+            pixel_scale=mosaic_pixel_scale,
+            pad=mosaic_pad,
+            get_hdu=True,
+            verbose=False,
+        )
+
+        ref_wcs = WCS(hdu.header)
+
+    # Default set of parameters for drizzled mosaics
+    _mosaic_kwargs = {
+        "rootname": field_name,
+        "res": res[
+            ~is_grism
+        ],  # Pass the exposure information table for the direct images
+        "ir_wcs": ref_wcs,
+        "half_optical": False,  # Otherwise will make JWST exposures at half pixel scale of ref_wcs
+        "kernel": drizzle_kernel,
+        "pixfrac": drizzle_pixfrac,
+        "clean_flt": False,  # Otherwise removes "rate.fits" files from the working directory!
+        "s3output": None,
+        "make_exptime_map": False,
+        "weight_type": "jwst",
+        "skip_existing": False,
+        "context": os.environ["CRDS_CONTEXT"],
+    }
+
+    # Make individual drizzled images for each of the filters
+    _ = visit_processor.cutout_mosaic(
+        recursive_merge(_mosaic_kwargs, cutout_mosaic_kwargs)
+    )
+
+    from astropy.table import vstack
+    from grizli.pipeline import auto_script
+
+    # Create a combined visits.yaml
+    visits, groups, info = [], [], None
+    for assoc_name in assoc_tab_dict.keys():
+        v, g, i = auto_script.load_visits_yaml(
+            grizli_home_dir
+            / "visits"
+            / assoc_name
+            / "Prep"
+            / f"{assoc_name}_visits.yaml"
+        )
+        for j, v_j in enumerate(v):
+            v[j]["footprints"] = [fp for fps in v_j["footprints"] for fp in fps]
+        for j, g_j in enumerate(g):
+            for img_type in g_j.keys():
+                try:
+                    g[j][img_type]["footprints"] = [
+                        fp for fps in g_j[img_type]["footprints"] for fp in fps
+                    ]
+                except:
+                    print(f"Problem with {g[j]}")
+
+        visits.extend(v)
+        groups.extend(g)
+        if info is None:
+            info = i
+        else:
+            info = vstack([info, i])
+
+    auto_script.write_visit_info(
+        visits, groups, info, field_name, path=str(grizli_home_dir / "Prep")
+    )
+
+    # Make a stacked mosaic using all three filters
+    auto_script.make_filter_combinations(
+        field_name,
+        filter_combinations={"ir": ["F115WN-CLEAR", "F150WN-CLEAR", "F200WN-CLEAR"]},
+    )
+
+
+def recursive_merge(d1: dict, d2: dict) -> dict:
+    """
+    Recursively merge two dictionaries.
+
+    Values from the second are prioritised in case of conflicts. This code
+    was originally posted on stackoverflow, by Aaron Hall and Bobik.
+
+    Parameters
+    ----------
+    d1 : dict
+        The original dictionary.
+    d2 : dict
+        The new dictionary, which can overwrite values in `d1`.
+
+    Returns
+    -------
+    dict
+        The merged dictionary.
+    """
+
+    from collections.abc import MutableMapping
+
+    for k, v in d1.items():
+        if k in d2:
+            # this next check is the only difference!
+            if all(isinstance(e, MutableMapping) for e in (v, d2[k])):
+                d2[k] = rec_merge(v, d2[k])
+            # we could further check types and merge as appropriate here.
+    d3 = d1.copy()
+    d3.update(d2)
+    return d3
