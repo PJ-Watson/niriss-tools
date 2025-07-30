@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0","numpy>=2", "setuptools_scm>=8.0","Cython>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "GLASS-NIRISS"
+name = "niriss-tools"
 dynamic = ["version"]
 authors = [
-  { name="Peter J. Watson", email="peter.watson+GN@inaf.it" },
+  { name="Peter J. Watson", email="peter.watson+NT@inaf.it" },
 ]
-description = "A complete pipeline for processing JWST-NIRISS data."
+description = "A set of tools for processing JWST NIRISS/WFSS data."
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
@@ -52,8 +52,8 @@ isophotal = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/PJ-Watson/GLASS-NIRISS"
-"Bug Tracker" = "https://github.com/PJ-Watson/GLASS-NIRISS/issues"
+"Homepage" = "https://github.com/PJ-Watson/niriss-tools"
+"Bug Tracker" = "https://github.com/PJ-Watson/niriss-tools/issues"
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]
@@ -87,4 +87,4 @@ override_SS05 = [  # override SS05 to allow docstrings starting with these words
 ]
 
 [tool.setuptools_scm]
-version_file = "src/glass_niriss/_version.py"
+version_file = "src/niriss_tools/_version.py"

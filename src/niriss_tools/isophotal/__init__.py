@@ -5,6 +5,6 @@ This includes alignment and reprojection of all images to the NIRISS reference,
 and iterative isophote measurements for each image.
 """
 
-from glass_niriss.isophotal.align import *
-from glass_niriss.isophotal.model import *
-from glass_niriss.isophotal.psf_matching import *
+from niriss_tools.isophotal.align import *
+from niriss_tools.isophotal.model import *
+from niriss_tools.isophotal.psf_matching import *

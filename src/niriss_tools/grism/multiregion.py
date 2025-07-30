@@ -28,8 +28,8 @@ from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
 from reproject import reproject_interp
 
-from glass_niriss.grism.fitting_tools import CDNNLS
-from glass_niriss.grism.specgen import (
+from niriss_tools.grism.fitting_tools import CDNNLS
+from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
     BagpipesSampler,
     ExtendedModelGalaxy,
@@ -272,11 +272,6 @@ class MultiRegionFit:
                     models_shape, dtype=float, buffer=shm_models.buf
                 )
 
-            # with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-            #     samples2d = np.array(post_file["samples2d"])
-
-            # for sample_i, row in enumerate(rows):
-
             with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
                 samples2d = np.array(post_file["samples2d"])[rows]
 
@@ -468,7 +463,7 @@ class MultiRegionFit:
             ``True``.
         pline : dict, optional
             Parameters for generating the drizzled emission line maps.
-            Defaults to `~glass_niriss.grism.DEFAULT_PLINE`.
+            Defaults to `~niriss_tools.grism.DEFAULT_PLINE`.
         seed : int | None, optional
             The seed for the random sampling, by default 2744. If None,
             then a new seed will be generated each time this method is

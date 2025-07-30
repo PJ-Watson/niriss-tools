@@ -21,7 +21,7 @@ from photutils.background import Background2D
 from photutils.isophote import Ellipse, EllipseGeometry, build_ellipse_model
 from photutils.segmentation import SourceCatalog, SourceFinder, make_2dgaussian_kernel
 
-from glass_niriss.c_utils import build_ellipse_model as fast_build_ellipse_model
+from niriss_tools.c_utils import build_ellipse_model as fast_build_ellipse_model
 
 __all__ = ["ClusterModels"]
 

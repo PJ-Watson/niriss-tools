@@ -19,7 +19,7 @@ from photutils.psf.matching import (
 )
 from scipy.ndimage import zoom
 
-from glass_niriss.isophotal import align
+from niriss_tools.isophotal import align
 
 __all__ = ["match_photutils", "match_pypher", "reproject_and_convolve"]
 
@@ -227,17 +227,17 @@ def reproject_and_convolve(
         saved, by default True.
     new_wcs_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `~glass_niriss.isophotal.gen_new_wcs`, by default ``None``.
+        `~niriss_tools.isophotal.gen_new_wcs`, by default ``None``.
     reproject_image_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `~glass_niriss.isophotal.reproject_image`, by default ``None``.
+        `~niriss_tools.isophotal.reproject_image`, by default ``None``.
     psf_method : {"pypher" or "photutils"}, optional
         The method used to generate the PSF-matching homogenisation
         kernel, by default ``"pypher"``.
     psf_match_kw : dict | None, optional
         Any additional keyword arguments to pass through to
-        `glass_niriss.isophotal.match_photutils` or
-        `glass_niriss.isophotal.match_pypher`, depending on
+        `niriss_tools.isophotal.match_photutils` or
+        `niriss_tools.isophotal.match_pypher`, depending on
         ``psf_method``. By default None.
     convolve_method : {"fft", "direct"}, optional
         The method used to convolve the reprojected images with the

@@ -936,7 +936,7 @@ class BagpipesSampler(object):
             for more details). By default ``None``.
         **model_kwargs : dict, optional
             Any additional keyword arguments to pass to
-            `~glass_niriss.grism.specgen.ExtendedModelGalaxy`.
+            `~niriss_tools.grism.specgen.ExtendedModelGalaxy`.
 
         Returns
         -------

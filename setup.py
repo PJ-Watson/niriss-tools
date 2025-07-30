@@ -9,13 +9,8 @@ import numpy
 from Cython.Build import cythonize
 from setuptools import Extension, setup
 
-# sourcefiles = [
-#     os.path.join("src", "glass_niriss", "c_utils", "isophote_model.pyx")
-# ]  # +glob(os.path.join("src", "glass_niriss","c_utils","*.c"))
-# sourcefiles = glob(os.path.join("src", "glass_niriss", "c_utils", "*.pyx"))
-# headerfiles = glob(os.path.join("src", "glass_niriss", "c_utils", "*.h"))
 ext_kwargs = {
-    "include_dirs": [numpy.get_include(), "src/glass_niriss/c_utils"],
+    "include_dirs": [numpy.get_include(), "src/niriss_tools/c_utils"],
     "define_macros": [
         ("_USE_MATH_DEFINES", "1"),
         ("NPY_NO_DEPRECATED_API", "NPY_2_0_API_VERSION"),
@@ -24,16 +19,15 @@ ext_kwargs = {
 }
 extensions = [
     Extension(
-        "glass_niriss.c_utils.isophote_model",
-        sources=["src/glass_niriss/c_utils/isophote_model.pyx"],
-        depends=["src/glass_niriss/c_utils/worker.h"],
-        # extra_compile_args=["-fopenmp"],
+        "niriss_tools.c_utils.isophote_model",
+        sources=["src/niriss_tools/c_utils/isophote_model.pyx"],
+        depends=["src/niriss_tools/c_utils/worker.h"],
         extra_link_args=["-fopenmp"],
         **ext_kwargs,
     ),
     Extension(
-        "glass_niriss.c_utils.array_ops",
-        sources=["src/glass_niriss/c_utils/array_ops.pyx"],
+        "niriss_tools.c_utils.array_ops",
+        sources=["src/niriss_tools/c_utils/array_ops.pyx"],
         **ext_kwargs,
     ),
 ]
