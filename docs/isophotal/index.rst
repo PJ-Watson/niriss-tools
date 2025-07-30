@@ -1,4 +1,4 @@
-.. _glass-niriss-isophotal:
+.. _niriss-tools-isophotal:
 
 *******************
 Isophotal Modelling

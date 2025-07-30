@@ -1,4 +1,4 @@
-.. _glass-niriss-c_utils:
+.. _niriss-tools-c_utils:
 
 *****************
 Utility Functions

@@ -1,4 +1,4 @@
 Reference/API
 *************
 
-.. automodapi:: glass_niriss.grism
+.. automodapi:: niriss_tools.grism

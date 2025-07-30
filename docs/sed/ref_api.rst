@@ -1,5 +1,5 @@
 Reference/API
 *************
 
-.. automodapi:: glass_niriss.sed
+.. automodapi:: niriss_tools.sed
    :inherited-members:

@@ -1,5 +1,5 @@
 Reference/API
 *************
 
-.. automodapi:: glass_niriss.isophotal
+.. automodapi:: niriss_tools.isophotal
    :inherited-members:

@@ -1,9 +1,9 @@
-.. GLASS-NIRISS documentation master file, created by
+.. niriss-tools documentation master file, created by
    sphinx-quickstart on Wed Sep  4 11:58:15 2024.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-GLASS-NIRISS documentation
+niris-tools documentation
 ==========================
 
 Add your content using ``reStructuredText`` syntax. See the

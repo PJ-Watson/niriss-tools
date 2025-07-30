@@ -1,4 +1,4 @@
-.. _glass-niriss-grism:
+.. _niriss-tools-grism:
 
 *******************
 Grism Modelling
