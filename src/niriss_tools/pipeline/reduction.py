@@ -98,3 +98,88 @@ def run_det1(uncal_path: PathLike, output_dir: PathLike, **kwargs):
         output_file=uncal_path.stem.removesuffix("_uncal"),
         **kwargs,
     )
+
+
+def gen_assocs(raw_output_dir: PathLike, field_name: str = "glass-a2744") -> dict:
+    """
+    Generate association tables for each group of filters and grisms.
+
+    This is particularly useful for programmes such as PASSAGE, for which
+    no existing associations are available in the Dawn JWST Archive.
+
+    Parameters
+    ----------
+    raw_output_dir : PathLike
+        Where the current ``_rate.fits`` files are located.
+    field_name : str, optional
+        The name of the field, by default "glass-a2744".
+
+    Returns
+    -------
+    dict
+        The keys of the dict are the name of each group, and the values
+        are the association tables.
+    """
+
+    from astropy.io import fits
+    from astropy.table import Table
+    from astropy.wcs import WCS
+    from grizli import utils as grizli_utils
+    from shapely.geometry import Polygon
+
+    assoc_dict = {}
+
+    for filepath in raw_output_dir.glob("*_rate.fits"):
+        main_hdr = fits.getheader(filepath)
+        sci_hdr = fits.getheader(filepath, "SCI")
+        filt_only = grizli_utils.parse_filter_from_header(main_hdr).split("-")[0]
+        filt_all = grizli_utils.parse_filter_from_header(main_hdr)
+
+        # There's surely a more intelligent way to do this, but grizli is happy for now
+        s = np.asarray(
+            sci_hdr["S_REGION"].removeprefix("POLYGON ICRS  ").split(" "), dtype=float
+        )
+        footprint = (
+            f"(({s[0]}, {s[1]}), ({s[2]}, {s[3]}), ({s[4]}, {s[5]}), ({s[6]}, {s[7]}))"
+        )
+        name = filepath.stem.removesuffix("_rate")
+        try:
+            assoc_dict[f"{field_name}_assoc_{filt_only.lower()}"].add_row(
+                [
+                    name,
+                    "rate",
+                    name,
+                    f"{field_name}_assoc_{filt_only.lower()}",
+                    filt_all,
+                    main_hdr.get("INSTRUME"),
+                    main_hdr.get("PROGRAM"),
+                    f"dummy/{filepath.name}",
+                    footprint,
+                ],
+            )
+        except:
+            assoc_dict[f"{field_name}_assoc_{filt_only.lower()}"] = Table(
+                data=[
+                    [name],
+                    ["rate"],
+                    [name],
+                    [f"{field_name}_assoc_{filt_only.lower()}"],
+                    [filt_all],
+                    [main_hdr.get("INSTRUME")],
+                    [main_hdr.get("PROGRAM")],
+                    [f"dummy/{filepath.name}"],
+                    [footprint],
+                ],
+                names=[
+                    "file",
+                    "extension",
+                    "dataset",
+                    "assoc",
+                    "filter",
+                    "instrument_name",
+                    "proposal_id",
+                    "dataURL",
+                    "footprint",
+                ],
+            )
+    return assoc_dict
