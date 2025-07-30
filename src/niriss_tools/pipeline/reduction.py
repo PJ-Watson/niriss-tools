@@ -9,6 +9,8 @@ from pathlib import Path
 import astropy
 import numpy as np
 
+__all__ = ["stsci_det1", "run_det1", "gen_associations", "process_using_aws"]
+
 
 def stsci_det1(
     uncal_dir: PathLike,
@@ -101,7 +103,7 @@ def run_det1(uncal_path: PathLike, output_dir: PathLike, **kwargs):
     )
 
 
-def gen_assocs(raw_output_dir: PathLike, field_name: str = "glass-a2744") -> dict:
+def gen_associations(raw_output_dir: PathLike, field_name: str = "glass-a2744") -> dict:
     """
     Generate exposure tables for each group of filters and grisms.
 
