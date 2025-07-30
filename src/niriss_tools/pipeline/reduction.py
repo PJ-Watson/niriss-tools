@@ -51,25 +51,27 @@ def stsci_det1(
             file.stem.replace("_uncal", "_rate")
         )
         if output_filename.is_file():
-            print(f"{output_filename} exists.")
+            # print(f"{output_filename} exists.")
             continue
         else:
             files_to_process.append(file)
 
-    from joblib import Parallel, delayed
+    if len(files_to_process) > 0:
 
-    Parallel(
-        n_jobs=cpu_count,
-        backend=joblib_backend,
-        verbose=50,
-    )(
-        delayed(run_det1)(
-            uncal_path=file,
-            output_dir=raw_output_dir,
-            **kwargs,
+        from joblib import Parallel, delayed
+
+        Parallel(
+            n_jobs=cpu_count,
+            backend=joblib_backend,
+            verbose=50,
+        )(
+            delayed(run_det1)(
+                uncal_path=file,
+                output_dir=raw_output_dir,
+                **kwargs,
+            )
+            for file in files_to_process
         )
-        for file in files_to_process
-    )
 
 
 def run_det1(uncal_path: PathLike, output_dir: PathLike, **kwargs):
