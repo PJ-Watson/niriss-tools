@@ -348,10 +348,9 @@ def process_using_aws(
         "skip_existing": False,
         "context": os.environ["CRDS_CONTEXT"],
     }
-
     # Make individual drizzled images for each of the filters
     _ = visit_processor.cutout_mosaic(
-        recursive_merge(_mosaic_kwargs, cutout_mosaic_kwargs)
+        **recursive_merge(_mosaic_kwargs, cutout_mosaic_kwargs)
     )
 
     from astropy.table import vstack

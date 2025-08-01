@@ -4,7 +4,12 @@ import os
 from pathlib import Path
 
 import numpy as np
-import utils
+
+try:
+    from passagepipe import utils
+except:
+    import utils
+
 from astropy.table import Table
 
 # Latest context
@@ -16,10 +21,11 @@ from niriss_tools import pipeline
 
 root_dir = os.getenv("ROOT_DIR")
 field_name = "par028"
+field_obs_IDs = [228, 229, 230, 231, 232, 233, 234, 235, 236]
+field_name = "par017"
+field_obs_IDs = [172, 173]
 passage_dir = Path(root_dir) / f"2025_07_28_{field_name}"
 passage_dir.mkdir(exist_ok=True, parents=True)
-
-Par028_obs_IDs = [228, 229, 230, 231, 232, 233, 234, 235, 236]
 
 
 if __name__ == "__main__":
@@ -32,7 +38,7 @@ if __name__ == "__main__":
     else:
         all_obs_tab = Table.read(passage_dir / "MAST_summary.csv")
 
-    field_obs_tab = all_obs_tab[np.isin(all_obs_tab["obs_id_num"], Par028_obs_IDs)]
+    field_obs_tab = all_obs_tab[np.isin(all_obs_tab["obs_id_num"], field_obs_IDs)]
 
     from mastquery import utils as mastutils
 

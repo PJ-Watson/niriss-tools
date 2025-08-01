@@ -1,4 +1,4 @@
-.. _glass-niriss-sed:
+.. _niriss-tools-sed:
 
 ***********
 SED Fitting
