@@ -23,10 +23,15 @@ dependencies = [
     "astropy>=6.1",
     "numpy>=1.26.4",
     "matplotlib>=3.9",
-    # "tqdm>=4.66",
+    "tqdm>=4.67",
     "scipy>=1.13",
     "Cython>=3",
-    "vorbin"
+    "vorbin",
+    "reproject>=0.14",
+    "photutils>=2.0.0",
+    "shapely>=2.0.4",
+    "bagpipes-extended@git+https://github.com/PJ-Watson/bagpipes-extended",
+    "grizli[jwst,aws]@git+https://github.com/PJ-Watson/grizli#egg=new_workflow"
 ]
 
 [project.optional-dependencies]
@@ -39,16 +44,6 @@ docs = [
     "numpydoc>=1.8",
     "sphinx-astropy>=1.9.1",
     "pydata-sphinx-theme>=0.16.1"
-]
-grism = [
-    "grizli[jwst]",
-    "bagpipes",
-]
-isophotal = [
-    "bottleneck>=1.4",
-    "photutils>=2.0.0",
-    "reproject>=0.14",
-    "shapely>=2.0.4"
 ]
 
 [project.urls]

@@ -6,5 +6,4 @@ and iterative isophote measurements for each image.
 """
 
 from niriss_tools.isophotal.align import *
-from niriss_tools.isophotal.model import *
 from niriss_tools.isophotal.psf_matching import *
