@@ -241,7 +241,7 @@ def process_using_aws(
         `grizli.aws.visit_processor.cutout_mosaic`, by default ``{}``.
     """
 
-    visit_dir = visit_dir
+    visit_dir = grizli_home_dir / "visits"
     os.chdir(visit_dir)
 
     import shutil
