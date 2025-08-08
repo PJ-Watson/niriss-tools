@@ -526,6 +526,7 @@ def reproject_image(
                     ),
                 )
             print("About to reproject")
+            out_dtype = orig_hdul[input_hdu_index].data.dtype
 
             repr_output = reproject_fn(
                 # orig_hdul[input_hdu_index],
@@ -543,7 +544,7 @@ def reproject_image(
             if type(repr_output) == tuple:
                 out_hdul.append(
                     fits.ImageHDU(
-                        data=repr_output[0],
+                        data=repr_output[0].astype(out_dtype),
                         header=out_hdr,
                     )
                 )
@@ -557,10 +558,13 @@ def reproject_image(
             else:
                 out_hdul.append(
                     fits.ImageHDU(
-                        data=repr_output,
+                        data=repr_output.astype(out_dtype),
                         header=out_hdr,
                     )
                 )
+
+            if reproject_kwargs.get("order") in ["nearest-neighbor", 0]:
+                out_hdul[0].data[~(out_hdul[0].data >= 0)] = 0
 
             out_hdul.writeto(output_path, overwrite=True)
 

@@ -191,6 +191,67 @@ def gen_associations(raw_output_dir: PathLike, field_name: str = "glass-a2744") 
     return assoc_dict
 
 
+def load_assoc(
+    ra=3.58641,
+    dec=-30.39997,
+    radius=1,
+    proposal_id=1324,
+):
+    """
+    Load exposure tables and association names from the DJA.
+
+    Default parameters are those used for the GLASS-JWST ERS analysis.
+
+    Parameters
+    ----------
+    ra : float, optional
+        The right ascension of the centre of the field of interest, by
+        default ``3.58641``.
+    dec : float, optional
+        The declination of the centre of the field of interest, by default
+        ``-30.39997``.
+    radius : int, optional
+        The radius in arcminutes to query, by default ``1``.
+    proposal_id : int, optional
+        The JWST proposal ID for the observations of interest, by default
+        ``1324``.
+
+    Returns
+    -------
+    dict
+        The keys of the dict are the name of each association, and the
+        values are the exposure tables.
+    """
+
+    import shutil
+
+    from grizli import utils
+    from grizli.aws import visit_processor
+
+    QUERY_URL = (
+        "https://grizli-cutout.herokuapp.com/assoc"
+        "?coord={ra},{dec}&arcmin={radius}&output=csv"
+    )
+
+    assoc_query = utils.read_catalog(
+        QUERY_URL.format(ra=ra, dec=dec, radius=radius), format="csv"
+    )
+
+    nis = (assoc_query["instrument_name"] == "NIRISS") & (
+        assoc_query["proposal_id"] == proposal_id
+    )
+
+    EXPOSURE_API = "https://grizli-cutout.herokuapp.com/exposures?associations={assoc}"
+
+    assoc_dict = {}
+    for assoc_name in assoc_query["assoc_name"][nis]:
+        exp = utils.read_catalog(EXPOSURE_API.format(assoc=assoc_name), format="csv")
+        assoc_dict[assoc_name] = exp
+        # assoc_dict[assoc_name] = None
+
+    return assoc_dict
+
+
 def process_using_aws(
     grizli_home_dir: PathLike,
     raw_output_dir: PathLike,
@@ -248,6 +309,8 @@ def process_using_aws(
 
     from grizli import utils as grizli_utils
     from grizli.aws import visit_processor
+
+    visit_processor.ROOT_PATH = str(visit_dir)
 
     for assoc_name, exp in assoc_tab_dict.items():
         if not (visit_dir / assoc_name / "Prep").is_dir():

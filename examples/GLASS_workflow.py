@@ -20,29 +20,28 @@ os.environ["NIRISS_CALIB"] = "GRIZLI"
 from niriss_tools import pipeline
 
 root_dir = os.getenv("ROOT_DIR")
-field_name = "par028"
-field_obs_IDs = [228, 229, 230, 231, 232, 233, 234, 235, 236]
-# field_name = "par017"
-# field_obs_IDs = [172, 173]
-passage_dir = Path(root_dir) / f"2025_07_28_{field_name}"
-passage_dir.mkdir(exist_ok=True, parents=True)
+field_name = "glass-a2744"
+proposal_ID = 1324
+reduction_dir = Path(root_dir) / f"2025_08_05_{field_name}"
+reduction_dir.mkdir(exist_ok=True, parents=True)
 
 
 if __name__ == "__main__":
 
     # Find the correct observations (utils.py is from passagepipe, I couldn't figure out
     # how to access the raw files on MAST until checking that)
-    if not (passage_dir / "MAST_summary.csv").is_file():
-        all_obs_tab = utils.queryMAST(1571)
-        all_obs_tab.write(passage_dir / "MAST_summary.csv", overwrite=True)
+    if not (reduction_dir / "MAST_summary.csv").is_file():
+        all_obs_tab = utils.queryMAST(proposal_ID)
+        all_obs_tab.write(reduction_dir / "MAST_summary.csv", overwrite=True)
     else:
-        all_obs_tab = Table.read(passage_dir / "MAST_summary.csv")
+        all_obs_tab = Table.read(reduction_dir / "MAST_summary.csv")
 
-    field_obs_tab = all_obs_tab[np.isin(all_obs_tab["obs_id_num"], field_obs_IDs)]
+    # Any other checks to add here?
+    field_obs_tab = all_obs_tab
 
     from mastquery import utils as mastutils
 
-    MAST_dir = passage_dir / "MAST_downloads"
+    MAST_dir = reduction_dir / "MAST_downloads"
     MAST_dir.mkdir(exist_ok=True, parents=True)
 
     # Download if not already existing
@@ -50,7 +49,7 @@ if __name__ == "__main__":
     if len(uncal_files) != len(field_obs_tab):
         mastutils.download_from_mast(field_obs_tab, path=MAST_dir)
 
-    level_1_dir = passage_dir / "Level1"
+    level_1_dir = reduction_dir / "Level1"
     level_1_dir.mkdir(exist_ok=True, parents=True)
 
     # Create the _rate.fits files
@@ -70,22 +69,17 @@ if __name__ == "__main__":
     jwst_utils.set_quiet_logging(jwst_utils.QUIET_LEVEL)
 
     # Setup the grizli directory structure
-    grizli_home_dir = passage_dir / "grizli_home"
+    grizli_home_dir = reduction_dir / "grizli_home"
 
     grizli_home_dir.mkdir(exist_ok=True, parents=True)
     (grizli_home_dir / "Prep").mkdir(exist_ok=True)
     (grizli_home_dir / "RAW").mkdir(exist_ok=True)
     (grizli_home_dir / "visits").mkdir(exist_ok=True)
 
-    # As PASSAGE was not ingested into the DJA in the same way as
-    # other fields (e.g. GLASS), we have to create an association
-    # table ourselves. This contains info on the instrument, filters,
-    # footprints, and filenames per group
-    assoc_dict = pipeline.gen_associations(level_1_dir, field_name)
-    # for assoc, tab in assoc_dict.items():
-    #     tab.pprint_all()
-
     if not (grizli_home_dir / "Prep" / f"{field_name}-ir_drc_sci.fits").is_file():
+
+        assoc_dict = load_assoc()
+
         pipeline.process_using_aws(
             grizli_home_dir, level_1_dir, assoc_dict, field_name=field_name
         )
@@ -105,7 +99,9 @@ if __name__ == "__main__":
             from niriss_tools.pipeline import regen_catalogue
 
             # Or whatever name you came up with during the previous reduction
-            old_seg_name = passage_dir / f"{field_name.capitalize()}_det_drz_seg.fits"
+            old_seg_name = (
+                reduction_dir / f"{field_name}-ir_seg_mod_3_ordered2_2074.fits"
+            )
 
             aligned_seg_name = grizli_home_dir / "Prep" / f"aligned_{old_seg_name.name}"
 
@@ -121,6 +117,11 @@ if __name__ == "__main__":
             segment_map = fits.getdata(aligned_seg_name)
 
             use_regen_seg = np.asarray(segment_map).astype(np.int32)
+            print(
+                np.min(use_regen_seg),
+                np.max(use_regen_seg),
+                len(np.unique(use_regen_seg)),
+            )
             new_cat = regen_catalogue(
                 use_regen_seg,
                 root=f"{field_name}-ir",
@@ -143,23 +144,6 @@ if __name__ == "__main__":
             master_catalog=exist_cat_name,
             **multiband_catalog_args,
         )
-
-        # multiband_catalog_args = auto_script.get_yml_parameters()[
-        #     "multiband_catalog_args"
-        # ]
-        # multiband_catalog_args["run_detection"] = True
-        # multiband_catalog_args["filters"] = [
-        #     "f115wn-clear",
-        #     "f150wn-clear",
-        #     "f200wn-clear",
-        # ]
-        # # print (multiband_catalog_args)
-        # multiband_catalog_args["threshold"] = 2
-
-        # phot_cat = auto_script.multiband_catalog(
-        #     field_root=field_name,
-        #     **multiband_catalog_args,
-        # )
 
     kwargs = auto_script.get_yml_parameters()
 
@@ -288,7 +272,7 @@ if __name__ == "__main__":
     pline = {
         "kernel": "square",
         "pixfrac": 1.0,
-        "pixscale": 0.04,
+        "pixscale": 0.06,
         "size": 5,
         "wcs": None,
     }
@@ -302,16 +286,35 @@ if __name__ == "__main__":
         use_phot_obj=False,
     )
 
-    # The galaxies in Ayan's paper
-    galaxies = {1849: 3.08, 1303: 1.87, 300: 1.87, 2867: 1.97}
+    # The galaxies in Nicolo's paper
+    galaxies = {
+        # 1300: 3.21,
+        # 2744: 1.86,
+        # 2355: 1.86,
+        # 1694: 1.37,
+        # 235: 2.58,
+        # 3384: 1.93,
+        # 1504: 3.00,
+        # 998: 2.01,
+        # 17: 1.27,
+        # 1407: 3.15,
+        # 2549: 2.93,
+        # 2982: 3.39,
+        # 2663: 2.65,
+        # 2074: 1.36
+        # 646: 0.65,
+        # 1196: 0.72,
+        # 1444: 0.94
+        3070: 1.34
+    }
 
     for obj_id, obj_z in galaxies.items():
 
         if not (Path.cwd() / f"{field_name}_{obj_id:0>5}.full.fits").is_file():
 
             beams = grp.get_beams(
-                obj_id,
-                size=30,
+                int(obj_id),
+                size=50,
                 min_mask=0,
                 min_sens=0,
                 show_exception=True,
@@ -320,11 +323,16 @@ if __name__ == "__main__":
             mb = multifit.MultiBeam(
                 beams, fcontam=0.2, min_sens=0.0, min_mask=0, group_name=field_name
             )
-            mb.fit_trace_shift()
+
+            # This produces unusual offsets in the emission line maps.
+            # Probably a bug in grizli that I don't have the energy to
+            # chase down anymore.
+            # mb.fit_trace_shift()
+
             mb.write_master_fits()
 
             _ = fitting.run_all_parallel(
-                obj_id,
+                int(obj_id),
                 zr=[obj_z - 0.05, obj_z + 0.05],
                 dz=[0.001, 0.0001],
                 verbose=True,
