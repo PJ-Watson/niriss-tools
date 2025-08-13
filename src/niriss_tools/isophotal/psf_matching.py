@@ -254,8 +254,15 @@ def reproject_and_convolve(
     out_dir = Path(out_dir)
     out_dir.mkdir(exist_ok=True, parents=True)
 
-    new_wcs_kwargs = dict(new_wcs_kw or {})
-    new_wcs, new_shape = align.gen_new_wcs(ref_path=ref_path, **new_wcs_kwargs)
+    if new_wcs_kw is not None:
+        new_wcs_kwargs = dict(new_wcs_kw or {})
+        new_wcs, new_shape = align.gen_new_wcs(ref_path=ref_path, **new_wcs_kwargs)
+    else:
+        from astropy.wcs import WCS
+
+        new_shape = fits.getdata(ref_path).shape
+        new_wcs = WCS(fits.getheader(ref_path))
+
     reproject_image_kwargs = dict(reproject_image_kw or {})
 
     if "method" not in reproject_image_kwargs:

@@ -1,4 +1,4 @@
-"""An example workflow for reducing NIRISS/WFSS data from PASSAGE Par028."""
+"""An example workflow for reducing NIRISS/WFSS data from GLASS-JWST ERS."""
 
 import os
 from pathlib import Path
@@ -165,10 +165,13 @@ if __name__ == "__main__":
     grism_files = [str(s) for s in Path.cwd().glob("*GrismFLT.fits")][:]
 
     if len(grism_files) == 0:
-        # rate_files = []
-        # for rate in Path.cwd().glob("*_rate.fits"):
-        #     if fits.getheader(rate)["PUPIL"] != "F115W":
-        #         rate_files.append(str(rate))
+        rate_files = []
+        for rate in Path.cwd().glob("*_rate.fits"):
+            if (fits.getheader(rate)["PUPIL"] == "F200W") and (
+                fits.getheader(rate)["FILTER"] == "GR150C"
+            ):
+                rate_files.append(str(rate))
+        rate_files = rate_files[:2]
 
         # if len(rate_files) > 0:
 
@@ -184,8 +187,8 @@ if __name__ == "__main__":
 
         # Here we use all of the detected objects.
         # These can be adjusted based on how deep the spectra/visits are
-        grism_prep_args["refine_mag_limits"] = [14.0, 50.0]
-        grism_prep_args["prelim_mag_limit"] = 50.0
+        grism_prep_args["refine_mag_limits"] = [14.0, 25.0]
+        grism_prep_args["prelim_mag_limit"] = 25.0
 
         # The grism reference filters for direct images
         grism_prep_args["gris_ref_filters"] = {
@@ -196,28 +199,28 @@ if __name__ == "__main__":
         grism_prep_args["use_jwst_crds"] = False
         grism_prep_args["files"] = rate_files[:]
 
-        args_MB_conf = grism_prep_args.copy()
+        # args_MB_conf = grism_prep_args.copy()
 
-        # Calculate the non-1st order contamination using the 221215.conf files (Matharu & Brammer)
-        args_MB_conf["model_kwargs"] = {
-            "compute_size": True,
-            "get_beams": ["B", "C", "D", "E"],
-            # "get_beams": ["B"],
-            "force_orders": True,
-        }
+        # # Calculate the non-1st order contamination using the 221215.conf files (Matharu & Brammer)
+        # args_MB_conf["model_kwargs"] = {
+        #     "compute_size": True,
+        #     "get_beams": ["B", "C", "D", "E"],
+        #     # "get_beams": ["B"],
+        #     "force_orders": True,
+        # }
 
-        grp = auto_script.grism_prep(
-            field_root=field_name, pad=800, cpu_count=cpu_count, **args_MB_conf
-        )
+        # grp = auto_script.grism_prep(
+        #     field_root=field_name, pad=800, cpu_count=cpu_count, **args_MB_conf
+        # )
 
-        os.chdir(grizli_home_dir / "Prep")
+        # os.chdir(grizli_home_dir / "Prep")
 
-        # Move the non-1st order contamination models to a different directory
-        MB_conf_dir = grizli_home_dir / "Prep" / "MB_conf"
-        MB_conf_dir.mkdir(exist_ok=True)
-        for s in (grizli_home_dir / "Prep").glob("*GrismFLT.fits"):
-            s.rename(MB_conf_dir / s.name)
-            s.with_suffix(".pkl").unlink()
+        # # Move the non-1st order contamination models to a different directory
+        # MB_conf_dir = grizli_home_dir / "Prep" / "MB_conf"
+        # MB_conf_dir.mkdir(exist_ok=True)
+        # for s in (grizli_home_dir / "Prep").glob("*GrismFLT.fits"):
+        #     s.rename(MB_conf_dir / s.name)
+        #     s.with_suffix(".pkl").unlink()
 
         # Calculate the 1st order models with the most up-to-date STScI calibrations
         args_CRDS_conf = grism_prep_args.copy()
@@ -232,15 +235,15 @@ if __name__ == "__main__":
             field_root=field_name, pad=800, cpu_count=cpu_count, **args_CRDS_conf
         )
 
-        # Add the two models together
-        os.chdir(grizli_home_dir / "Prep")
-        for s in (grizli_home_dir / "Prep").glob("*GrismFLT.fits"):
-            with fits.open(s, mode="update") as crds_hdul:
-                MB_cont_model = fits.getdata(
-                    grizli_home_dir / "Prep" / "MB_conf" / s.name, "MODEL"
-                )
-                crds_hdul["MODEL"].data += MB_cont_model
-                crds_hdul.flush()
+        # # Add the two models together
+        # os.chdir(grizli_home_dir / "Prep")
+        # for s in (grizli_home_dir / "Prep").glob("*GrismFLT.fits"):
+        #     with fits.open(s, mode="update") as crds_hdul:
+        #         MB_cont_model = fits.getdata(
+        #             grizli_home_dir / "Prep" / "MB_conf" / s.name, "MODEL"
+        #         )
+        #         crds_hdul["MODEL"].data += MB_cont_model
+        #         crds_hdul.flush()
 
         # Testing with only the NGDEEP calibrations
         # os.environ["NIRISS_CALIB"] = "NGDEEP"
@@ -255,6 +258,8 @@ if __name__ == "__main__":
         # grp = auto_script.grism_prep(
         #     field_root=field_name, pad=800, cpu_count=cpu_count, **args_NP_conf
         # )
+
+    exit()
 
     # The usual extraction code follows
 
