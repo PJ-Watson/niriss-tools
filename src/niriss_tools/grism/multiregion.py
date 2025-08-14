@@ -119,11 +119,11 @@ class MultiRegionFit:
         fits.Header
             The updated header.
         """
-        header["HIERARCH BAGPIPES_RUN"] = (
+        header["MRBPRUN"] = (
             str(self.run_name),
             "The name of the bagpipes run used to generate the prior templates.",
         )
-        header["HIERARCH BAGPIPES_PHOTCAT"] = (
+        header["MRBPPCAT"] = (
             str(self.binned_data),
             "The binned photometric catalogue and segmentation map used as input for bagpipes.",
         )
