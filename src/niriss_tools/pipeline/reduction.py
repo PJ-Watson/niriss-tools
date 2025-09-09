@@ -9,7 +9,13 @@ from pathlib import Path
 import astropy
 import numpy as np
 
-__all__ = ["stsci_det1", "run_det1", "gen_associations", "process_using_aws", "recursive_merge"]
+__all__ = [
+    "stsci_det1",
+    "run_det1",
+    "gen_associations",
+    "process_using_aws",
+    "recursive_merge",
+]
 
 
 def stsci_det1(

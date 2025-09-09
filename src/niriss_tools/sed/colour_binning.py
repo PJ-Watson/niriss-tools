@@ -24,7 +24,7 @@ def colour_aggregate(
     quiet: bool = False,
     mask: ArrayLike | None = None,
     crop: tuple | None = None,
-    **kwargs
+    **kwargs,
 ) -> tuple[ArrayLike, int, ArrayLike, ArrayLike]:
     """
     Bin pixels to a specified signal/noise ratio.

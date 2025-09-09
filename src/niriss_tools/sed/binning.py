@@ -509,6 +509,7 @@ def bin_and_save(
     seg_hdu_index: int | str = 0,
     padding: int = 50,
     overwrite: bool = False,
+    binned_name : str | None = None,
     **bin_kwargs,
 ) -> PathLike:
     """
@@ -611,8 +612,9 @@ def bin_and_save(
             **bin_kwargs,
         )
 
-    # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
-    binned_name = f"{obj_id}_{bin_scheme}_{bin_diameter}_{target_sn}_{sn_filter}"
+    if binned_name is None:
+        # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
+        binned_name = f"{obj_id}_{bin_scheme}_{bin_diameter}_{target_sn}_{sn_filter}"
 
     save_path = out_dir / f"{binned_name}_data.fits"
     if save_path.is_file() and not overwrite:
