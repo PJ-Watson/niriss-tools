@@ -23,6 +23,8 @@ def gen_stacked_beams(
     pixfrac: float = 1.0,
     kernel: str = "square",
     dfillval: float = 0,
+    fit_trace_shift: bool = False,
+    trace_shift_kwargs: dict = {},
     **multibeam_kwargs,
 ):
     """
@@ -52,6 +54,13 @@ def gen_stacked_beams(
         The value to be assigned to output pixels that have zero weight,
         or that do not receive flux from any input pixels during
         drizzling. By default this is 0.
+    fit_trace_shift : bool, optional
+        Fit for a cross-dispersion offset before stacking the beams, using
+        `~grizli.multifit.MultiBeam.fit_trace_shift()`. By default
+        ``False``.
+    trace_shift_kwargs : dict, optional
+        Additional keyword arguments to pass through to
+        `~grizli.multifit.MultiBeam.fit_trace_shift()` if used.
     **multibeam_kwargs : dict, optional
         Any additional parameters to pass through to
         `~grizli.multifit.MultiBeam` when loading the original object.
@@ -64,6 +73,9 @@ def gen_stacked_beams(
 
     if type(mb) is str:
         mb = MultiBeam(beams=str(mb), **multibeam_kwargs)
+
+    if fit_trace_shift:
+        mb.fit_trace_shift(**trace_shift_kwargs)
 
     from drizzlepac import adrizzle
 
@@ -110,7 +122,11 @@ def gen_stacked_beams(
             )
 
             new_beam.grism.wcs = grizli_utils.transform_wcs(
-                new_beam.grism.wcs, translation=shift_crpix
+                new_beam.grism.wcs,
+                translation=[
+                    shift_crpix[0] - new_beam.beam.xoffset,
+                    shift_crpix[1] - new_beam.beam.yoffset,
+                ],
             )
             new_beam.direct.wcs = grizli_utils.transform_wcs(
                 new_beam.direct.wcs, translation=shift_crpix
@@ -149,7 +165,11 @@ def gen_stacked_beams(
 
                 beam = mb.beams[idx]
                 direct_wcs_i = beam.direct.wcs
-                grism_wcs_i = beam.grism.wcs.copy()
+                # grism_wcs_i = beam.grism.wcs.copy()
+                grism_wcs_i = grizli_utils.transform_wcs(
+                    beam.grism.wcs.copy(),
+                    translation=[-beam.beam.xoffset, -beam.beam.yoffset],
+                )
 
                 contam_weight = np.exp(
                     -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))

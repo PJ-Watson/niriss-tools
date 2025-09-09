@@ -946,7 +946,7 @@ class MultiRegionFit:
                 print(
                     f"Array size reduced from {stacked_A.shape} to "
                     f"{stacked_Ax.shape[::-1]} ("
-                    f"{np.prod(stacked_Ax.shape)/np.prod(stacked_A.shape[-1]):.1%} of original)"
+                    f"{np.prod(stacked_Ax.shape)/np.prod(stacked_A.shape):.1%} of original)"
                 )
                 print("NNLS fitting...")
 
@@ -990,8 +990,10 @@ class MultiRegionFit:
                         # n_threads=20 # Inter-thread communication is actually slower
                     )
                     state.solve()
-                    coeffs = state.beta
+                    state_iters = deepcopy(state.iters)
+                    coeffs = deepcopy(state.beta)
                     coeffs[:num_stacks] -= off
+                    del state
 
                 print(f"NNLS fitting... DONE {time()-t1:.3f}s")
 
@@ -1009,7 +1011,7 @@ class MultiRegionFit:
                         iteration,
                         chi2,
                         _nnls_i,
-                        state.iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
+                        state_iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
                         _nnls_t,
                         rows,
                         id_shifts,

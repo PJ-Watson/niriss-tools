@@ -130,10 +130,12 @@ def match_pypher(
 
     if tmp_dir is None:
         tmp_dir = Path.cwd()
-    if isinstance(source_psf, PathLike) and oversample == 1:
+    if (
+        isinstance(source_psf, PathLike) or isinstance(source_psf, str)
+    ) and oversample == 1:
         source_path = source_psf
     else:
-        if isinstance(source_psf, PathLike):
+        if isinstance(source_psf, PathLike) or isinstance(source_psf, str):
             source_psf = fits.getdata(source_psf)
 
         source_path = tmp_dir / "psf_a.fits"
@@ -144,10 +146,12 @@ def match_pypher(
         source_psf /= source_psf.sum()
         fits.writeto(source_path, data=source_psf, header=header, overwrite=True)
 
-    if isinstance(target_psf, PathLike) and oversample == 1:
+    if (
+        isinstance(target_psf, PathLike) or isinstance(target_psf, str)
+    ) and oversample == 1:
         target_path = target_psf
     else:
-        if isinstance(target_psf, PathLike):
+        if isinstance(target_psf, PathLike) or isinstance(target_psf, str):
             target_psf = fits.getdata(target_psf)
         target_path = tmp_dir / "psf_b.fits"
         header = fits.Header()

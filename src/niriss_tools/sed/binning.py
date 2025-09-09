@@ -467,7 +467,7 @@ def save_binned_data_fits(
                 )
                 if header is None:
                     header = sci_hdul[0].header
-                    wcs = WCS(hdr)[crop]
+                    wcs = WCS(header)[crop]
                     header.update(wcs.to_header())
 
             except Exception as e:
