@@ -28,6 +28,7 @@ from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
 from reproject import reproject_interp
 
+import niriss_tools
 from niriss_tools.grism.fitting_tools import CDNNLS
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
@@ -35,6 +36,9 @@ from niriss_tools.grism.specgen import (
     ExtendedModelGalaxy,
     check_coverage,
 )
+from niriss_tools.grism.utils import gen_stacked_beams, align_direct_images
+from niriss_tools.pipeline.reduction import recursive_merge
+from niriss_tools.sed.binning import bin_and_save
 
 __all__ = ["MultiRegionFit", "DEFAULT_PLINE"]
 
@@ -78,32 +82,185 @@ class MultiRegionFit:
 
     def __init__(
         self,
-        binned_data: PathLike,
-        pipes_dir: PathLike,
-        run_name: str,
-        beams: list,
+        config_path: PathLike,
+        obj_id: int,
+        obj_z: float,
+        run_all: bool = True,
+        # binned_data: PathLike,
+        # pipes_dir: PathLike,
+        # run_name: str,
+        # beams: list,
+        # **multibeam_kwargs,
+    ):
+
+        self.obj_id = obj_id
+        self.obj_z = obj_z
+
+        self.import_config(config_path)
+
+        if run_all:
+            self.gen_aligned_photometry(
+                binning_kwargs=self.binning_kwargs, use_stacks=self.use_stacks
+            )
+
+        # self.MB = MultiBeam(beams=beams, **multibeam_kwargs)
+        # self.id, self.ra, self.dec = self.MB.id, self.MB.ra, self.MB.dec
+
+        # self.binned_data = binned_data
+        # self.regions_phot_cat = Table.read(self.binned_data, "PHOT_CAT")
+        # self.regions_phot_cat = self.regions_phot_cat[
+        #     self.regions_phot_cat["bin_id"].astype(int) != 0
+        # ]
+        # self.n_regions = len(self.regions_phot_cat)
+
+        # with fits.open(binned_data) as hdul:
+        #     self.regions_seg_map = hdul["SEG_MAP"].data.copy()
+        #     self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
+        #     self.regions_seg_wcs = WCS(self.regions_seg_hdr)
+
+        # self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
+
+        # self.run_name = run_name
+        # self.pipes_dir = pipes_dir
+
+    def import_config(self, config_path: PathLike):
+
+        import tomllib, yaml, warnings
+
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        self.root_dir = Path(config["files"].get("root_dir", "/"))
+        self.out_dir = self.root_dir / config["files"].get("out_dir", ".")
+        self.out_dir.mkdir(exist_ok=True, parents=True)
+        self.extractions_dir = self.root_dir / config["files"].get(
+            "extractions_dir", "."
+        )
+
+        _info_dict = config["files"].get("info_dict", "")
+        if not _info_dict:
+            raise ValueError("`info_dict` is not present in the supplied config file.")
+
+        with open(self.root_dir / _info_dict, "r") as file:
+            self.info_dict = yaml.safe_load(file)
+
+        self.pipes_dir = self.out_dir / "sed_fitting" / "pipes"
+        self.pipes_dir.mkdir(exist_ok=True, parents=True)
+        if not config["files"].get("atlas_dir", ""):
+            self.atlas_dir = self.pipes_dir / "atlases"
+        else:
+            self.atlas_dir = self.root_dir / config["files"]["atlas_dir"]
+        self.atlas_dir.mkdir(exist_ok=True, parents=True)
+
+        self.binning_kwargs = {
+            "bin_scheme": config["SED"].get("bin_scheme", "colour"),
+            "target_sn": config["SED"].get("target_sn", 10),
+            "bin_diameter": config["SED"].get("bin_diameter", 3),
+            "sn_filter": config["SED"]["sn_filter"],
+            **config["SED"].get("bin_kwargs", {}),
+        }
+
+        self.sed_fit_kwargs = {
+            "z_range": config["SED"].get("z_range", 0.005),
+            "sfh_type": config["SED"].get("sfh_type", "continuity"),
+            "min_age_bin": config["SED"].get("min_age_bin", 20),
+            "num_age_bins": config["SED"].get("num_age_bins", 5),
+            "n_samples": config["SED"].get("n_samples", 1e6),
+            "remake_atlas": config["SED"].get("remake_atlas", False),
+            "n_cores_atlas": config["SED"].get("n_cores_atlas", 4),
+            "n_cores_fit": config["SED"].get("n_cores_fit", 4),
+            "bin_kwargs": config["SED"].get("bin_kwargs", {}),
+        }
+
+        self.field_name = config["grism"]["field_name"]
+
+        self.use_stacks = config["grism"].get("use_stacks", True)
+        self.multibeam_kwargs = config["grism"].get("multibeam_kwargs", {})
+
+    def gen_atlas():
+        pass
+
+    def gen_aligned_photometry(
+        self,
+        binning_kwargs={},
+        use_stacks: bool = True,
+        beams_path=None,
+        img_cutout=500,
         **multibeam_kwargs,
     ):
 
-        self.MB = MultiBeam(beams=beams, **multibeam_kwargs)
-        self.id, self.ra, self.dec = self.MB.id, self.MB.ra, self.MB.dec
+        binned_data_dir = self.out_dir / "binned_data"
+        binned_data_dir.mkdir(exist_ok=True, parents=True)
 
-        self.binned_data = binned_data
-        self.regions_phot_cat = Table.read(self.binned_data, "PHOT_CAT")
-        self.regions_phot_cat = self.regions_phot_cat[
-            self.regions_phot_cat["bin_id"].astype(int) != 0
-        ]
-        self.n_regions = len(self.regions_phot_cat)
+        new_beam_loc = (
+            binned_data_dir / f"{self.field_name}_{self.obj_id:0>5}.beams.fits"
+        )
 
-        with fits.open(binned_data) as hdul:
-            self.regions_seg_map = hdul["SEG_MAP"].data.copy()
-            self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
-            self.regions_seg_wcs = WCS(self.regions_seg_hdr)
+        # Give a descriptive name for the binned data
+        self.binned_name = (
+            f"{self.obj_id}_{binning_kwargs["bin_scheme"]}_"
+            f"{binning_kwargs["bin_diameter"]}_{binning_kwargs["target_sn"]}"
+            f"_{binning_kwargs["sn_filter"]}"
+        )
+        self.binned_data_path = binned_data_dir / f"{binned_name}_data.fits"
 
-        self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
+        if not (binned_data_path.is_file() and new_beam_loc.is_file()):
 
-        self.run_name = run_name
-        self.pipes_dir = pipes_dir
+            if beams_path is None:
+
+                beams_path = [
+                    *self.extractions_dir.glob(f"**/*{self.obj_id:0>5}.beams.fits")
+                ]
+                if len(beams_path) >= 1:
+                    beams_path = str(beams_path[0])
+                else:
+                    raise IOError(
+                        f"Original beams file does not exist in {self.extractions_dir}"
+                    )
+
+            default_multib_kwargs = {
+                "min_mask": 0.0,
+                "min_sens": 0.0,
+                "mask_resid": False,
+                "verbose": False,
+                "fcontam": 0.2,
+                "group_name": self.field_name,
+            }
+            new_kwargs = recursive_merge(default_multib_kwargs, multibeam_kwargs)
+
+            if use_stacks:
+                multib = gen_stacked_beams(
+                    beams_path,
+                    **new_kwargs,
+                )
+            else:
+                multib = MultiBeam(
+                    beams_path,
+                    **new_kwargs,
+                )
+
+            # Write the realigned and (stacked?) beam to a file
+            beam_hdul = multib.write_master_fits(get_hdu=True)
+            beam_hdul.writeto(new_beam_loc, overwrite=True)
+
+            # Align all images to the new beam
+            aligned_info_dict = align_direct_images(
+                multib.beams[0],
+                info_dict=self.info_dict,
+                out_dir=binned_data_dir / f"{self.obj_id:0>5}",
+                overwrite=False,
+                cutout=img_cutout,
+            )
+
+            _seg = fits.getdata(new_beam_loc, "SEG")
+            bin_and_save(
+                obj_id=self.obj_id,
+                out_dir=binned_data_dir,  # / f"{obj_id:0>5}",
+                # seg_map=multib.beams[0].beam.seg,
+                seg_map=_seg,
+                info_dict=aligned_info_dict,
+                **binning_kwargs,
+            )
 
     def add_pipes_info(self, header: fits.Header) -> fits.Header:
         """
