@@ -117,8 +117,8 @@ class MultiRegionFit:
                 n_cores=self.n_cores_atlas_fit,
                 z_range=self.sed_fit_kwargs["z_range"],
             )
-
-            self.MB = MultiBeam(beams = self.beam_path, **self.multibeam_kwargs)
+            
+            self.MB = MultiBeam(beams = str(self.beam_path), **self.multibeam_kwargs)
             self.ra, self.dec = self.MB.ra, self.MB.dec
 
             self.regions_phot_cat = Table.read(self.binned_data_path, "PHOT_CAT")
@@ -134,7 +134,7 @@ class MultiRegionFit:
 
             self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
 
-            self.
+            self.fit_at_z(self.obj_z, **self.grism_fit_kwargs)
 
         # self.MB = MultiBeam(beams=beams, **multibeam_kwargs)
         # self.id, self.ra, self.dec = self.MB.id, self.MB.ra, self.MB.dec
@@ -203,7 +203,7 @@ class MultiRegionFit:
             "num_age_bins": config["SED"].get("num_age_bins", 5),
             "n_samples": config["SED"].get("n_samples", 1e6),
             "remake_atlas": config["SED"].get("remake_atlas", False),
-            # "n_cores_atlas": config["SED"].get("n_cores_atlas", 4),
+            "n_cores_atlas": config["SED"].get("n_cores_atlas", 4),
             # "bin_kwargs": config["SED"].get("bin_kwargs", {}),
         }
 
@@ -213,7 +213,43 @@ class MultiRegionFit:
         self.field_name = config["grism"]["field_name"]
 
         self.use_stacks = config["grism"].get("use_stacks", True)
-        self.multibeam_kwargs = config["grism"].get("multibeam_kwargs", {})
+
+        multibeam_kwargs = config["grism"].get("multibeam_kwargs", {})
+
+        default_multib_kwargs = {
+            "min_mask": 0.0,
+            "min_sens": 0.0,
+            "mask_resid": False,
+            "verbose": False,
+            "fcontam": 0.2,
+            "group_name": self.field_name,
+        }
+        self.multibeam_kwargs = recursive_merge(default_multib_kwargs, multibeam_kwargs)
+
+        self.grism_fit_kwargs = {
+            "fit_background": config["grism"].get("fit_background", True),
+            "poly_order": config["grism"].get("poly_order", 0),
+            "n_samples": config["grism"].get("n_region_samples", 3),
+            "n_iters": config["grism"].get("n_iters", 10),
+            "spec_wavs": config["grism"].get("spec_wavs", None),
+            "oversamp_factor": config["grism"].get("oversamp_factor", 1),
+            "veldisp": config["grism"].get("veldisp", 500),
+            "out_dir": config["grism"].get("out_dir", "multiregion"),
+            "temp_dir": config["grism"].get("temp_dir", None),
+            "memmap": config["grism"].get("memmap", False),
+            "cpu_count": config["grism"].get("cpu_count", -1),
+            "overwrite": config["grism"].get("overwrite", False),
+            "use_lines": config["grism"].get("use_lines",CLOUDY_LINE_MAP),
+            "save_lines": config["grism"].get("save_lines", True),
+            "save_stacks": config["grism"].get("save_stacks", True),
+            "pline": config["grism"].get("pline", DEFAULT_PLINE),
+            "seed": config["grism"].get("seed", 2744),
+            "nnls_method": config["grism"].get("nnls_method", "scipy"),
+            "nnls_iters": config["grism"].get("nnls_iters", 10),
+            "nnls_tol": config["grism"].get("nnls_tol", 1e-5),
+            "n_shifted": config["grism"].get("n_shifted", 2),
+            "n_shifted_samples": config["grism"].get("n_shifted_samples", 1),
+        }
 
     def fit_atlas(
         self,
@@ -260,8 +296,8 @@ class MultiRegionFit:
         cat_IDs = np.array(obs_table[id_colname])
 
         # catalogue_out_path = fit.out_path / Path(f"{binned_name}_{run_name}.fits")
-        catalogue_out_path = fit.out_path / f"{self.run_name}_cat.fits"
-        if (not catalogue_out_path.is_file()) or overwrite:
+        catalogue_out_path = fit.out_path / f"{self.run_name}.fits"
+        if (not catalogue_out_path.is_file()) or overwrite_fit:
 
             fit.fit_catalogue(
                 IDs=cat_IDs,
@@ -326,7 +362,7 @@ class MultiRegionFit:
         if not atlas_path.is_file() or remake_atlas:
 
             atlas_gen = AtlasGenerator(
-                fit_instructions=bagpipes_atlas_params,
+                fit_instructions=self.bagpipes_atlas_params,
                 filt_list=self.filter_list,
                 phot_units="ergscma",
             )
@@ -685,7 +721,7 @@ class MultiRegionFit:
         n_samples: int = 3,
         n_iters: int = 10,
         spec_wavs: ArrayLike | None = None,
-        oversamp_factor: int = 3,
+        oversamp_factor: int = 1,
         veldisp: float = 500,
         direct_images: None = None,
         out_dir: PathLike | None = None,
@@ -703,7 +739,6 @@ class MultiRegionFit:
         nnls_tol: float = 1e-5,
         n_shifted: int = 2,
         n_shifted_samples: int = 1,
-        **grizli_kwargs,
     ):
         """
         Fit the object at a specified redshift.
@@ -735,7 +770,7 @@ class MultiRegionFit:
             significantly slows down the model generation, but is
             essential to ensure that the template spectra correspond to
             the correct pixels in the NIRISS detector frame, and defaults
-            to a factor of ``3``.
+            to a factor of ``1``.
         veldisp : float, optional
             The velocity dispersion of the template spectra in km/s, by
             default ``500``.
@@ -744,7 +779,7 @@ class MultiRegionFit:
             By default ``None``.
         out_dir : PathLike | None, optional
             Where the output files will be written. If ``None`` (default),
-            the current working directory will be used.
+            files will be written to ``self.out_dir/multiregion``.
         temp_dir : PathLike | None, optional
             The temporary directory to use for memmapped files (if
             ``memmap==True``). If ``None`` (default), the current working
@@ -814,11 +849,6 @@ class MultiRegionFit:
             additional regions (i.e. the total number of samples is given
             by ``n_samples + n_shifted * n_shifted_samples``). By default,
             only 1 sample is drawn from each extra region.
-        **grizli_kwargs : dict, optional
-            A catch-all for previous `grizli` keywords. These are
-            redundant in the multiregion method, and are kept only to
-            avoid keyword argument conflicts with the standard `grizli`
-            function.
 
         Returns
         -------
@@ -847,11 +877,12 @@ class MultiRegionFit:
                 temp_dir = Path(temp_dir)
                 temp_dir.mkdir(exist_ok=True, parents=True)
 
-        if out_dir is None:
-            out_dir = Path.cwd()
+        if not out_dir:
+            multireg_out_dir = self.out_dir / "multiregion"
         else:
-            out_dir = Path(out_dir)
-            out_dir.mkdir(exist_ok=True, parents=True)
+            multireg_out_dir = Path(out_dir)
+
+        multireg_out_dir.mkdir(exist_ok=True, parents=True)
 
         self.MB.init_poly_coeffs(poly_order=poly_order)
 
@@ -1096,7 +1127,7 @@ class MultiRegionFit:
         stacked_fit_mask &= np.isfinite(stacked_scif)
 
         # TODO: make the output name a parameter?
-        self.output_table_path = out_dir / (
+        self.output_table_path = multireg_out_dir / (
             f"{self.obj_id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
             f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
         )
@@ -1472,7 +1503,7 @@ class MultiRegionFit:
                 start_idx += np.prod(v["2d_shape"])
 
             stacked_hdul.writeto(
-                out_dir / f"regions_{self.obj_id:05d}_z_{z}_stacked.fits",
+                multireg_out_dir / f"regions_{self.obj_id:05d}_z_{z}_stacked.fits",
                 output_verify="silentfix",
                 overwrite=True,
             )
@@ -1619,7 +1650,7 @@ class MultiRegionFit:
                 line_hdu.insert(1, seg_hdu)
 
                 line_hdu.writeto(
-                    out_dir
+                    multireg_out_dir
                     / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
                     output_verify="silentfix",
                     overwrite=True,
