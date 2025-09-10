@@ -916,6 +916,7 @@ class BagpipesSampler(object):
         param_vector: ArrayLike,
         cont_only: bool = False,
         rm_line: list[str] | str | None = None,
+        return_line_flux: bool = False,
         **model_kwargs,
     ) -> ArrayLike:
         """
@@ -934,6 +935,9 @@ class BagpipesSampler(object):
             naming convention (see `here
             <https://bagpipes.readthedocs.io/en/latest/model_galaxies.html#getting-observables-line-fluxes>`__
             for more details). By default ``None``.
+        return_line_flux : bool, optional
+            If ``True``, return the total line flux for all lines named in
+            ``rm_line``. By default ``False``.
         **model_kwargs : dict, optional
             Any additional keyword arguments to pass to
             `~niriss_tools.grism.specgen.ExtendedModelGalaxy`.
@@ -955,4 +959,11 @@ class BagpipesSampler(object):
         # else:
         self.model_gal.update(new_comps, cont_only=cont_only, rm_line=rm_line)
 
-        return self.model_gal.spectrum.T
+        if return_line_flux:
+            line_flux = 0.0
+            rm_line = np.atleast_1d(rm_line).ravel()
+            for rm in rm_line:
+                line_flux += self.model_gal.line_fluxes[rm]
+            return self.model_gal.spectrum.T, line_flux
+        else:
+            return self.model_gal.spectrum.T

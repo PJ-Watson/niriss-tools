@@ -138,39 +138,6 @@ class MultiRegionFit:
 
             self.fit_at_z(self.obj_z, **self.grism_fit_kwargs)
 
-        # self.MB = MultiBeam(beams=beams, **multibeam_kwargs)
-        # self.id, self.ra, self.dec = self.MB.id, self.MB.ra, self.MB.dec
-
-        # self.binned_data = binned_data
-        # self.regions_phot_cat = Table.read(self.binned_data, "PHOT_CAT")
-        # self.regions_phot_cat = self.regions_phot_cat[
-        #     self.regions_phot_cat["bin_id"].astype(int) != 0
-        # ]
-        # self.n_regions = len(self.regions_phot_cat)
-
-        # with fits.open(binned_data) as hdul:
-        #     self.regions_seg_map = hdul["SEG_MAP"].data.copy()
-        #     self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
-        #     self.regions_seg_wcs = WCS(self.regions_seg_hdr)
-
-        # self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
-
-        # self.run_name = run_name
-        # self.pipes_dir = pipes_dir
-
-    # binned_data : PathLike
-    #     The file containing the binned photometric catalogue.
-    # pipes_dir : PathLike
-    #     The directory in which the `bagpipes` posterior distributions are
-    #     saved.
-    # run_name : str
-    #     The name of the bagpipes run used to fit the galaxy.
-    # beams : list
-    #     List of `~grizli.model.BeamCutout` objects.
-    # **multibeam_kwargs : dict, optional
-    #     Any additional parameters to pass through to
-    #     `grizli.multifit.MultiBeam`.
-
     def import_config(self, config_path: PathLike):
         """
         Parse a configuration file and set class attributes accordingly.
@@ -228,7 +195,6 @@ class MultiRegionFit:
             "n_samples": config["SED"].get("n_samples", 1e6),
             "remake_atlas": config["SED"].get("remake_atlas", False),
             "n_cores_atlas": config["SED"].get("n_cores_atlas", 4),
-            # "bin_kwargs": config["SED"].get("bin_kwargs", {}),
         }
 
         self.n_cores_atlas_fit = config["SED"].get("n_cores_fit", 4)
@@ -755,6 +721,7 @@ class MultiRegionFit:
         memmap: bool = False,
         id_shifts=None,
         n_shifted_rows=None,
+        return_line_flux=False,
     ):
         seg_id = int(seg_id)
 
@@ -797,14 +764,23 @@ class MultiRegionFit:
                             axis=0,
                         )
 
+            if return_line_flux:
+                line_fluxes = np.zeros(len(samples2d))
+
             for sample_i, sample in enumerate(samples2d):
 
-                temp_resamp_1d = pipes_sampler.sample(
+                out = pipes_sampler.sample(
                     sample,
                     spec_wavs=spec_wavs,
                     cont_only=cont_only,
                     rm_line=rm_line,
+                    return_line_flux=return_line_flux,
                 )
+                if return_line_flux:
+                    temp_resamp_1d, line_flux = out
+                    line_fluxes[sample_i] = line_flux
+                else:
+                    temp_resamp_1d = out
 
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
@@ -827,6 +803,9 @@ class MultiRegionFit:
 
             if memmap:
                 models_arr.flush()
+
+            if return_line_flux:
+                return line_fluxes
 
         except:
             raise Exception(
@@ -1548,6 +1527,44 @@ class MultiRegionFit:
         best_rows = [int(s) for s in output_table["rows"][best_iter]]
         best_id_shifts = [int(s) for s in output_table["id_shifts"][best_iter]]
 
+        # Refill array with best model
+        print("Calculating covariance array...")
+        with multiprocessing.Pool(
+            processes=cpu_count,
+            initializer=_init_pipes_sampler,
+            initargs=(
+                fit_instructions,
+                veldisp,
+                self.MB.beams,
+            ),
+        ) as pool:
+            for s_i, s in enumerate(self.regions_seg_ids):
+                pool.apply_async(
+                    stacked_fn,
+                    (s_i, s),
+                    kwds={"rows": best_rows, "id_shifts": best_id_shifts},
+                    error_callback=print,
+                    # error_callback=traceback.format_exc,
+                )
+            pool.close()
+            pool.join()
+
+        stacked_Ax = stacked_A[:, stacked_fit_mask]
+        ok_temp = (np.sum(stacked_Ax, axis=1) > 0) & (out_coeffs != 0)
+        stacked_Ax = stacked_Ax[ok_temp, :].T * 1
+        stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
+
+        try:
+            covar = grizli_utils.safe_invert(np.dot(stacked_Ax.T, stacked_Ax))
+        except:
+            N = ok_temp.sum()
+            covar = np.zeros((N, N))
+
+        covar_diagonal = grizli_utils.fill_masked_covar(covar, ok_temp).diagonal()
+
+        # Ensure that the array is cleaned before repopulating
+        stacked_A[temp_offset:].fill(0.0)
+
         # Largely unmodified from the original grizli code. Included within
         # this particular class method to avoid dealing with SharedMemory
         if save_stacks:
@@ -1708,6 +1725,7 @@ class MultiRegionFit:
                 coeffs=output_table[best_iter],
                 memmap=memmap,
                 n_shifted_rows=n_shifted_samples,
+                return_line_flux=True,
             )
 
             for l_i, l_v in enumerate(use_lines):
@@ -1719,23 +1737,42 @@ class MultiRegionFit:
 
                 flat_beam_models.fill(0.0)
 
+                # test = np.zeros_like(out_coeffs[temp_offset:])
+                results = []
+
                 with multiprocessing.Pool(
                     processes=cpu_count,
                     initializer=_init_pipes_sampler,
                     initargs=(fit_instructions, veldisp, self.MB.beams),
                 ) as pool:
                     for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                        pool.apply_async(
-                            beams_fn,
-                            args=(s_i, s),
-                            kwds={
-                                "rm_line": l_v["cloudy"],
-                                "id_shifts": best_id_shifts,
-                            },
-                            error_callback=print,
+                        results.append(
+                            pool.apply_async(
+                                beams_fn,
+                                args=(s_i, s),
+                                kwds={
+                                    "rm_line": l_v["cloudy"],
+                                    "id_shifts": best_id_shifts,
+                                },
+                                error_callback=print,
+                            )
                         )
+
                     pool.close()
                     pool.join()
+                line_fluxes = np.array([r.get() for r in results]).flatten()
+
+                # Probably belongs better elsewhere, but need to convert to correct units
+                flux_scale_factor = 1e-2
+                line_flux_i = (
+                    np.nansum(line_fluxes * out_coeffs[temp_offset:])
+                    * flux_scale_factor
+                )
+                line_err_i = (
+                    np.sqrt(np.nansum(line_fluxes**2 * covar_diagonal[temp_offset:]))
+                    * flux_scale_factor
+                )
+                print(f"Flux: {line_flux_i:.3E} +- {line_err_i:.3E}")
 
                 i0 = 0
                 start_idx = 0
@@ -1789,6 +1826,14 @@ class MultiRegionFit:
 
                 li = line_hdu[0].header["NUMLINES"]
                 line_hdu[0].header["LINE{0:03d}".format(li)] = l_v["grizli"]
+                line_hdu[0].header["FLUX{0:03d}".format(li)] = (
+                    line_flux_i,
+                    "Line flux, erg/s/cm2",
+                )
+                line_hdu[0].header["ERR{0:03d}".format(li)] = (
+                    line_err_i,
+                    "Line flux err, erg/s/cm2",
+                )
 
             if line_hdu is not None:
                 line_hdu[0].header["HASLINES"] = (
