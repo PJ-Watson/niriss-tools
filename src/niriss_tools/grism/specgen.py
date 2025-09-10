@@ -961,9 +961,10 @@ class BagpipesSampler(object):
 
         if return_line_flux:
             line_flux = 0.0
-            rm_line = np.atleast_1d(rm_line).ravel()
-            for rm in rm_line:
-                line_flux += self.model_gal.line_fluxes[rm]
+            if rm_line is not None:
+                rm_line = np.atleast_1d(rm_line).ravel()
+                for rm in rm_line:
+                    line_flux += self.model_gal.line_fluxes[rm]
             return self.model_gal.spectrum.T, line_flux
         else:
             return self.model_gal.spectrum.T

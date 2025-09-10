@@ -1735,85 +1735,99 @@ class MultiRegionFit:
 
                 print(f"Generating map for {l_v["grizli"]}...")
 
-                flat_beam_models.fill(0.0)
+                add_hdu = None
+                for continuum_temp in [True, False]:
 
-                # test = np.zeros_like(out_coeffs[temp_offset:])
-                results = []
+                    flat_beam_models.fill(0.0)
 
-                with multiprocessing.Pool(
-                    processes=cpu_count,
-                    initializer=_init_pipes_sampler,
-                    initargs=(fit_instructions, veldisp, self.MB.beams),
-                ) as pool:
-                    for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                        results.append(
-                            pool.apply_async(
-                                beams_fn,
-                                args=(s_i, s),
-                                kwds={
-                                    "rm_line": l_v["cloudy"],
-                                    "id_shifts": best_id_shifts,
-                                },
-                                error_callback=print,
+                    results = []
+
+                    with multiprocessing.Pool(
+                        processes=cpu_count,
+                        initializer=_init_pipes_sampler,
+                        initargs=(fit_instructions, veldisp, self.MB.beams),
+                    ) as pool:
+                        for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
+                            results.append(
+                                pool.apply_async(
+                                    beams_fn,
+                                    args=(s_i, s),
+                                    kwds={
+                                        "rm_line": (
+                                            l_v["cloudy"] if continuum_temp else None
+                                        ),
+                                        "id_shifts": best_id_shifts,
+                                    },
+                                    error_callback=print,
+                                )
                             )
+
+                        pool.close()
+                        pool.join()
+
+                    if continuum_temp:
+                        line_fluxes = np.array([r.get() for r in results]).flatten()
+
+                        # Probably belongs better elsewhere, but need to convert to correct units
+                        flux_scale_factor = 1e-2
+                        line_flux_i = (
+                            np.nansum(line_fluxes * out_coeffs[temp_offset:])
+                            * flux_scale_factor
+                        )
+                        line_err_i = (
+                            np.sqrt(
+                                np.nansum(line_fluxes**2 * covar_diagonal[temp_offset:])
+                            )
+                            * flux_scale_factor
+                        )
+                        print(f"Flux: {line_flux_i:.3E} +- {line_err_i:.3E}")
+
+                    i0 = 0
+                    start_idx = 0
+                    for k_i, (k, v) in enumerate(beam_info.items()):
+                        for ib in v["list_idx"]:
+                            self.MB.beams[ib].beam.model = flat_beam_models[
+                                i0 : i0 + np.prod(v["2d_shape"])
+                            ].reshape(v["2d_shape"])
+                            i0 += np.prod(v["2d_shape"])
+                        start_idx += np.prod(v["2d_shape"])
+
+                    hdu = drizzle_to_wavelength(
+                        self.MB.beams,
+                        ra=self.ra,
+                        dec=self.dec,
+                        wave=l_v["wave"] * (1 + z),
+                        fcontam=self.MB.fcontam,
+                        **pline,
+                    )
+
+                    hdu[0].header["REDSHIFT"] = (z, "Redshift used")
+                    hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
+                    hdu[0].header = self.add_pipes_info(hdu[0].header)
+                    for e in [-4, -3, -2, -1]:
+                        hdu[e].header["EXTVER"] = l_v["grizli"]
+                        hdu[e].header["REDSHIFT"] = (z, "Redshift used")
+                        hdu[e].header["RESTWAVE"] = (
+                            l_v["wave"],
+                            "Line rest wavelength",
                         )
 
-                    pool.close()
-                    pool.join()
-                line_fluxes = np.array([r.get() for r in results]).flatten()
-
-                # Probably belongs better elsewhere, but need to convert to correct units
-                flux_scale_factor = 1e-2
-                line_flux_i = (
-                    np.nansum(line_fluxes * out_coeffs[temp_offset:])
-                    * flux_scale_factor
-                )
-                line_err_i = (
-                    np.sqrt(np.nansum(line_fluxes**2 * covar_diagonal[temp_offset:]))
-                    * flux_scale_factor
-                )
-                print(f"Flux: {line_flux_i:.3E} +- {line_err_i:.3E}")
-
-                i0 = 0
-                start_idx = 0
-                for k_i, (k, v) in enumerate(beam_info.items()):
-                    for ib in v["list_idx"]:
-                        self.MB.beams[ib].beam.model = flat_beam_models[
-                            i0 : i0 + np.prod(v["2d_shape"])
-                        ].reshape(v["2d_shape"])
-                        i0 += np.prod(v["2d_shape"])
-                    start_idx += np.prod(v["2d_shape"])
-
-                hdu = drizzle_to_wavelength(
-                    self.MB.beams,
-                    ra=self.ra,
-                    dec=self.dec,
-                    wave=l_v["wave"] * (1 + z),
-                    fcontam=self.MB.fcontam,
-                    **pline,
-                )
-
-                hdu[0].header["REDSHIFT"] = (z, "Redshift used")
-                hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
-                hdu[0].header = self.add_pipes_info(hdu[0].header)
-                for e in [-4, -3, -2, -1]:
-                    hdu[e].header["EXTVER"] = l_v["grizli"]
-                    hdu[e].header["REDSHIFT"] = (z, "Redshift used")
-                    hdu[e].header["RESTWAVE"] = (
-                        l_v["wave"],
-                        "Line rest wavelength",
-                    )
+                    if add_hdu is None:
+                        add_hdu = hdu
+                    else:
+                        hdu[-3].header["EXTNAME"] = "MODEL"
+                        add_hdu.append(hdu[-3])
 
                 saved_lines.append(l_v["grizli"])
 
                 if line_hdu is None:
-                    line_hdu = hdu
+                    line_hdu = add_hdu
                     line_hdu[0].header["NUMLINES"] = (
                         1,
                         "Number of lines in this file",
                     )
                 else:
-                    line_hdu.extend(hdu[-4:])
+                    line_hdu.extend(add_hdu[-5:])
                     line_hdu[0].header["NUMLINES"] += 1
 
                     # Make sure DSCI extension is filled.  Can be empty for
