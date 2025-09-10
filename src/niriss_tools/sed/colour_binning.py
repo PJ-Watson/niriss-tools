@@ -62,6 +62,9 @@ def colour_aggregate(
     crop : tuple | None, optional
         The crop to be applied to the original images to match the shape
         of ``signal``.
+    **kwargs : dict, optional
+        A catch-all for additional parameters not relevant for this
+        binning scheme.
 
     Returns
     -------

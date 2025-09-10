@@ -509,7 +509,7 @@ def bin_and_save(
     seg_hdu_index: int | str = 0,
     padding: int = 50,
     overwrite: bool = False,
-    binned_name : str | None = None,
+    binned_name: str | None = None,
     **bin_kwargs,
 ) -> PathLike:
     """
@@ -565,6 +565,10 @@ def bin_and_save(
     overwrite : bool, optional
         If a catalogue already exists in ``out_dir``, this determines if
         it should be written over. By default ``False``.
+    binned_name : str | None, optional
+        Specify the exact name used for writing the output file. If
+        ``None`` (default), this will be automatically generated from
+        the chosen binning parameters.
     **bin_kwargs : dict, optional
         Any additional parameters to be passed through to
         `~niriss_tools.sed.constrained_adaptive`.

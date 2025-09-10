@@ -3,20 +3,19 @@ Functions and classes related to multi-region grism fitting.
 """
 
 import multiprocessing
+import os
+import shutil
 import sys
 import traceback
+from collections.abc import Callable
 from copy import deepcopy
 from functools import partial
 from itertools import product
 from multiprocessing import Manager, Pool, cpu_count, shared_memory
 from multiprocessing.managers import SharedMemoryManager
-import os
 from os import PathLike
 from pathlib import Path
 from time import time
-import shutil
-from collections.abc import Callable
-
 
 import h5py
 import matplotlib.pyplot as plt
@@ -26,6 +25,8 @@ from astropy.io import fits
 from astropy.nddata import block_reduce
 from astropy.table import Table
 from astropy.wcs import WCS
+from bagpipes_extended import AtlasFitter, AtlasGenerator
+from bagpipes_extended.pipeline import generate_fit_params, load_photom_bagpipes
 from grizli import utils as grizli_utils
 from grizli.model import GrismDisperser
 from grizli.multifit import MultiBeam, drizzle_to_wavelength
@@ -43,9 +44,6 @@ from niriss_tools.grism.specgen import (
 from niriss_tools.grism.utils import align_direct_images, gen_stacked_beams
 from niriss_tools.pipeline.reduction import recursive_merge
 from niriss_tools.sed.binning import bin_and_save
-
-from bagpipes_extended.pipeline import generate_fit_params, load_photom_bagpipes
-from bagpipes_extended import AtlasGenerator, AtlasFitter
 
 __all__ = ["MultiRegionFit", "DEFAULT_PLINE"]
 
@@ -73,18 +71,18 @@ class MultiRegionFit:
 
     Parameters
     ----------
-    binned_data : PathLike
-        The file containing the binned photometric catalogue.
-    pipes_dir : PathLike
-        The directory in which the `bagpipes` posterior distributions are
-        saved.
-    run_name : str
-        The name of the bagpipes run used to fit the galaxy.
-    beams : list
-        List of `~grizli.model.BeamCutout` objects.
-    **multibeam_kwargs : dict, optional
-        Any additional parameters to pass through to
-        `grizli.multifit.MultiBeam`.
+    config_path : PathLike
+        The TOML-formatted configuration file containing the parameters to
+        use for the fit.
+    obj_id : int
+        The object ID number to fit.
+    obj_z : float
+        The redshift at which the object should be fitted.
+    run_all : bool, optional
+        If ``True`` (default), the fit will proceed automatically based on
+        the setup described in the configuration file. If ``False``, the
+        configuration file will be parsed, but the individual fitting
+        methods must be called manually.
     """
 
     def __init__(
@@ -107,7 +105,9 @@ class MultiRegionFit:
 
         if run_all:
             self.beam_path, self.binned_data_path = self.gen_aligned_photometry(
-                binning_kwargs=self.binning_kwargs, use_stacks=self.use_stacks, **self.multibeam_kwargs
+                self.binning_kwargs,
+                use_stacks=self.use_stacks,
+                **self.multibeam_kwargs,
             )
             self.atlas_path = self.gen_atlas(**self.sed_fit_kwargs)
             self.fit_atlas(
@@ -117,8 +117,8 @@ class MultiRegionFit:
                 n_cores=self.n_cores_atlas_fit,
                 z_range=self.sed_fit_kwargs["z_range"],
             )
-            
-            self.MB = MultiBeam(beams = str(self.beam_path), **self.multibeam_kwargs)
+
+            self.MB = MultiBeam(beams=str(self.beam_path), **self.multibeam_kwargs)
             self.ra, self.dec = self.MB.ra, self.MB.dec
 
             self.regions_phot_cat = Table.read(self.binned_data_path, "PHOT_CAT")
@@ -132,7 +132,9 @@ class MultiRegionFit:
                 self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
                 self.regions_seg_wcs = WCS(self.regions_seg_hdr)
 
-            self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
+            self.regions_seg_ids = np.asarray(
+                self.regions_phot_cat["bin_id"], dtype=int
+            )
 
             self.fit_at_z(self.obj_z, **self.grism_fit_kwargs)
 
@@ -156,7 +158,29 @@ class MultiRegionFit:
         # self.run_name = run_name
         # self.pipes_dir = pipes_dir
 
+    # binned_data : PathLike
+    #     The file containing the binned photometric catalogue.
+    # pipes_dir : PathLike
+    #     The directory in which the `bagpipes` posterior distributions are
+    #     saved.
+    # run_name : str
+    #     The name of the bagpipes run used to fit the galaxy.
+    # beams : list
+    #     List of `~grizli.model.BeamCutout` objects.
+    # **multibeam_kwargs : dict, optional
+    #     Any additional parameters to pass through to
+    #     `grizli.multifit.MultiBeam`.
+
     def import_config(self, config_path: PathLike):
+        """
+        Parse a configuration file and set class attributes accordingly.
+
+        Parameters
+        ----------
+        config_path : PathLike
+            The TOML-formatted configuration file containing the parameters to
+            use for the fit.
+        """
 
         import tomllib
         import warnings
@@ -239,7 +263,7 @@ class MultiRegionFit:
             "memmap": config["grism"].get("memmap", False),
             "cpu_count": config["grism"].get("cpu_count", -1),
             "overwrite": config["grism"].get("overwrite", False),
-            "use_lines": config["grism"].get("use_lines",CLOUDY_LINE_MAP),
+            "use_lines": config["grism"].get("use_lines", CLOUDY_LINE_MAP),
             "save_lines": config["grism"].get("save_lines", True),
             "save_stacks": config["grism"].get("save_stacks", True),
             "pline": config["grism"].get("pline", DEFAULT_PLINE),
@@ -264,6 +288,52 @@ class MultiRegionFit:
         obj_z: float | ArrayLike | None = None,
         z_range: float = 0.005,
     ):
+        """
+        Perform a 2D SED fit to the binned photometric data.
+
+        Parameters
+        ----------
+        atlas_path : PathLike
+            The location of the previously generated model grid.
+        binned_data_path : PathLike
+            The location of the binned photometric catalogue and
+            segmentation map used as input for Bagpipes.
+        binned_data_hdu : str | int | None, optional
+            The identifier of the HDU within ``binned_data_path``
+            containing the photometric catalogue, by default
+            ``"PHOT_CAT"``.
+        bagpipes_atlas_params : dict | None, optional
+            A dictionary containing instructions on the kind of model
+            which should be fitted to the data. This should match the
+            previously generated model grid. If ``None`` (default),
+            ``self.bagpipes_atlas_params`` will be used.
+        load_fn : Callable | None, optional
+            A function which takes the ID as an argument and returns the
+            model photometry. This should be in the form of an array with
+            a column of fluxes in microjanskys and a column of flux errors
+            in the same units. If ``None`` (default),
+            `~bagpipes_extended.pipeline.load_photom_bagpipes` will be
+            used.
+        overwrite_fit : bool, optional
+            If ``True``, then any existing posterior distributions and
+            output catalogues will be overwritten. By default ``False``.
+        id_colname : str, optional
+            The name of the column in the photometric catalogue containing
+            the bin ID, by default ``"bin_id"``.
+        n_cores : int, optional
+            The number of processes to use when fitting the catalogue.
+            If set to ``0``, the code will run on a single process. If set
+            to an integer less than 0, this will run on the number of
+            cores returned by  `multiprocessing.cpu_count`. By default,
+            ``4`` processes will be used.
+        obj_z : float | ArrayLike | None, optional
+            This can be used to override the redshift used for fitting, in
+            case of a mismatch between the model atlas and the object of
+            interest. See `~niriss_tools.grism.MultiRegionFit.gen_atlas`
+            for more details.
+        z_range : float, optional
+            As above.
+        """
 
         if bagpipes_atlas_params is None:
             bagpipes_atlas_params = self.bagpipes_atlas_params
@@ -315,8 +385,6 @@ class MultiRegionFit:
         else:
             fit.cat = Table.read(catalogue_out_path)
 
-        print(fit.cat)
-
     def gen_atlas(
         self,
         obj_z: float | ArrayLike | None = None,
@@ -327,7 +395,57 @@ class MultiRegionFit:
         n_samples: int | float = 1e6,
         remake_atlas: bool = False,
         n_cores_atlas: int = 4,
-    ):
+    ) -> PathLike:
+        """
+        Generate the fit parameters and model grid.
+
+        This method generates a dictionary of fit parameters for Bagpipes,
+        as well as a large model grid to speed up the SED fitting.
+
+        Parameters
+        ----------
+        obj_z : float | ArrayLike | None, optional
+            The redshift of the object to fit. If a scalar value is
+            passed, and ``z_range==0.0``, the object will be fit to a
+            single redshift value. If ``z_range!=0.0``, this will be the
+            centre of the redshift window. If an array is passed, this
+            explicity sets the redshift range to use for fitting. If
+            ``None`` (default), this will be set to ``self.obj_z``.
+        z_range : float, optional
+            The maximum redshift range to search over, by default 0.005.
+            To fit to a single redshift, pass a single value for
+            ``obj_z``, and set ``z_range=0.0``. If ``obj_z`` is
+            ``ArrayLike``, this parameter is ignored.
+        num_age_bins : int, optional
+            The number of age bins to fit, each of which will have a
+            constant star formation rate following Leja+19. By default,
+            ``5`` bins are generated.
+        min_age_bin : float, optional
+            The minimum age to use for the continuity SFH in Myr, i.e. the
+            first bin will range from ``(0,min_age_bin)``. By default 20.
+        sfh_type : str, optional
+            The type of SFH prior to generate. Currently supports
+            ``"continuity"`` (Leja+19, fixed age bins),
+            ``"continuity_varied_z"`` (Leja+19, only the youngest age bin
+            is fixed), and ``"dblplaw"``.
+        n_samples : int | float, optional
+            The number of samples to generate. By default ``1e6``. A
+            useful number will typically be ``>10^5``.
+        remake_atlas : bool, optional
+            If ``True``, any existing model atlas with the same name will
+            be recreated and overwritten. By default ``False``.
+        n_cores_atlas : int, optional
+            The number of processes to use when generating the model grid.
+            If set to ``0``, the code will run on a single process. If set
+            to an integer less than 0, this will run on the number of
+            cores returned by  `multiprocessing.cpu_count`. By default,
+            ``4`` processes will be used.
+
+        Returns
+        -------
+        PathLike
+            The location of the model atlas.
+        """
 
         default_filter_dir = (
             Path(niriss_tools.__file__).parent / "data" / "filter_throughputs"
@@ -375,12 +493,53 @@ class MultiRegionFit:
 
     def gen_aligned_photometry(
         self,
-        binning_kwargs={},
+        binning_kwargs: dict,
         use_stacks: bool = True,
-        beams_path=None,
-        img_cutout=500,
+        beams_path: PathLike | None = None,
+        img_cutout: int = 500,
         **multibeam_kwargs,
-    ):
+    ) -> tuple[PathLike, PathLike]:
+        """
+        Align photometric data to the direct image in an extracted beam.
+
+        Parameters
+        ----------
+        binning_kwargs : dict
+            Any arguments to pass to
+            `~niriss_tools.sed.binning.bin_and_save`.
+        use_stacks : bool, optional
+            Whether to fit to individual beams, or beams stacked by filter
+            and grism. By default ``True``.
+        beams_path : PathLike | None, optional
+            The location of a ``*beams.fits`` file to use for fitting. If
+            ``None`` (default), this will be selected automatically based
+            on the ``obj_id`` and directory structure specified in the
+            configuration file.
+        img_cutout : int, optional
+            Make a slice of the original image with size in pixels
+            ``[-cutout,+cutout]`` around the centre of the object, before
+            alignment. By default, ``cutout=500``.
+        **multibeam_kwargs : dict, optional
+            Any additional parameters to pass through to
+            `grizli.multifit.MultiBeam`.
+
+        Returns
+        -------
+        new_beam_path : PathLike
+            The location of the ``*beams.fits`` used for alignment. If
+            ``use_stacks==True``, this will be a stacked version of the
+            input file.
+        binned_data_path : PathLike
+            The location of the binned data in FITS format. This contains
+            both the segmentation map and the binned photometric
+            catalogue.
+
+        Raises
+        ------
+        IOError
+            If no *beams.fits file can be found, this method will raise an
+            error.
+        """
 
         binned_data_dir = self.out_dir / "binned_data"
         binned_data_dir.mkdir(exist_ok=True, parents=True)
@@ -411,25 +570,18 @@ class MultiRegionFit:
                         f"Original beams file does not exist in {self.extractions_dir}"
                     )
 
-            default_multib_kwargs = {
-                "min_mask": 0.0,
-                "min_sens": 0.0,
-                "mask_resid": False,
-                "verbose": False,
-                "fcontam": 0.2,
-                "group_name": self.field_name,
-            }
-            new_kwargs = recursive_merge(default_multib_kwargs, multibeam_kwargs)
+            if multibeam_kwargs is None:
+                multibeam_kwargs = self.multibeam_kwargs
 
             if use_stacks:
                 multib = gen_stacked_beams(
                     beams_path,
-                    **new_kwargs,
+                    **multibeam_kwargs,
                 )
             else:
                 multib = MultiBeam(
                     beams_path,
-                    **new_kwargs,
+                    **multibeam_kwargs,
                 )
 
             # Write the realigned and (stacked?) beam to a file
