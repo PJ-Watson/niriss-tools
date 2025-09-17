@@ -18,6 +18,10 @@ Navigate to line 177 of `site-packages/stsci/tools/stpyfits.py`, and change the 
 raw_data = np.zeros(shape=dims, dtype=int) + pixval
 ```
 
+### Optional, but strongly recommended:
+
+Install [adelie](https://github.com/JamesYang007/adelie) as an alternative NNLS solver. This can provide a significant speed increase over `scipy` for higher-dimensional problems. Installation instructions can be found [here](https://github.com/JamesYang007/adelie/blob/main/docs/sphinx/user_guide/notebooks/installation.ipynb).
+
 ## FAQ
 
 ### Why can't I use older versions of Python?
