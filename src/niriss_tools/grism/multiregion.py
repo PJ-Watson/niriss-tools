@@ -3,8 +3,11 @@ Functions and classes related to multi-region grism fitting.
 """
 
 import multiprocessing
+import os
+import shutil
 import sys
 import traceback
+from collections.abc import Callable
 from copy import deepcopy
 from functools import partial
 from itertools import product
@@ -22,12 +25,15 @@ from astropy.io import fits
 from astropy.nddata import block_reduce
 from astropy.table import Table
 from astropy.wcs import WCS
+from bagpipes_extended import AtlasFitter, AtlasGenerator
+from bagpipes_extended.pipeline import generate_fit_params, load_photom_bagpipes
 from grizli import utils as grizli_utils
 from grizli.model import GrismDisperser
 from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
 from reproject import reproject_interp
 
+import niriss_tools
 from niriss_tools.grism.fitting_tools import CDNNLS
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
@@ -35,6 +41,9 @@ from niriss_tools.grism.specgen import (
     ExtendedModelGalaxy,
     check_coverage,
 )
+from niriss_tools.grism.utils import align_direct_images, gen_stacked_beams
+from niriss_tools.pipeline.reduction import recursive_merge
+from niriss_tools.sed.binning import bin_and_save
 
 __all__ = ["MultiRegionFit", "DEFAULT_PLINE"]
 
@@ -62,48 +71,505 @@ class MultiRegionFit:
 
     Parameters
     ----------
-    binned_data : PathLike
-        The file containing the binned photometric catalogue.
-    pipes_dir : PathLike
-        The directory in which the `bagpipes` posterior distributions are
-        saved.
-    run_name : str
-        The name of the bagpipes run used to fit the galaxy.
-    beams : list
-        List of `~grizli.model.BeamCutout` objects.
-    **multibeam_kwargs : dict, optional
-        Any additional parameters to pass through to
-        `grizli.multifit.MultiBeam`.
+    config_path : PathLike
+        The TOML-formatted configuration file containing the parameters to
+        use for the fit.
+    obj_id : int
+        The object ID number to fit.
+    obj_z : float
+        The redshift at which the object should be fitted.
+    run_all : bool, optional
+        If ``True`` (default), the fit will proceed automatically based on
+        the setup described in the configuration file. If ``False``, the
+        configuration file will be parsed, but the individual fitting
+        methods must be called manually.
     """
 
     def __init__(
         self,
-        binned_data: PathLike,
-        pipes_dir: PathLike,
-        run_name: str,
-        beams: list,
-        **multibeam_kwargs,
+        config_path: PathLike,
+        obj_id: int,
+        obj_z: float,
+        run_all: bool = True,
     ):
 
-        self.MB = MultiBeam(beams=beams, **multibeam_kwargs)
-        self.id, self.ra, self.dec = self.MB.id, self.MB.ra, self.MB.dec
+        self.obj_id = obj_id
+        self.obj_z = obj_z
 
-        self.binned_data = binned_data
-        self.regions_phot_cat = Table.read(self.binned_data, "PHOT_CAT")
+        self.import_config(config_path)
+
+        if run_all:
+            self.run_all()
+
+    def run_all(self):
+        """
+        Run the full fit based on the supplied configuration file.
+        """
+
+        self.beam_path, self.binned_data_path = self.gen_aligned_photometry(
+            self.binning_kwargs,
+            use_stacks=self.use_stacks,
+            **self.multibeam_kwargs,
+        )
+        self.atlas_path = self.gen_atlas(**self.sed_fit_kwargs)
+        self.fit_atlas(
+            self.atlas_path,
+            self.binned_data_path,
+            overwrite_fit=self.overwrite_atlas_fit,
+            n_cores=self.n_cores_atlas_fit,
+            z_range=self.sed_fit_kwargs["z_range"],
+        )
+
+        self.MB = MultiBeam(beams=str(self.beam_path), **self.multibeam_kwargs)
+        self.ra, self.dec = self.MB.ra, self.MB.dec
+
+        self.regions_phot_cat = Table.read(self.binned_data_path, "PHOT_CAT")
         self.regions_phot_cat = self.regions_phot_cat[
             self.regions_phot_cat["bin_id"].astype(int) != 0
         ]
         self.n_regions = len(self.regions_phot_cat)
 
-        with fits.open(binned_data) as hdul:
+        with fits.open(self.binned_data_path) as hdul:
             self.regions_seg_map = hdul["SEG_MAP"].data.copy()
             self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
             self.regions_seg_wcs = WCS(self.regions_seg_hdr)
 
         self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
 
-        self.run_name = run_name
-        self.pipes_dir = pipes_dir
+        self.fit_at_z(self.obj_z, **self.grism_fit_kwargs)
+
+    def import_config(self, config_path: PathLike):
+        """
+        Parse a configuration file and set class attributes accordingly.
+
+        Parameters
+        ----------
+        config_path : PathLike
+            The TOML-formatted configuration file containing the parameters to
+            use for the fit.
+        """
+
+        import tomllib
+        import warnings
+
+        import yaml
+
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        self.root_dir = Path(config["files"].get("root_dir", "/"))
+        self.out_dir = self.root_dir / config["files"].get("out_dir", ".")
+        self.out_dir.mkdir(exist_ok=True, parents=True)
+        self.extractions_dir = self.root_dir / config["files"].get(
+            "extractions_dir", "."
+        )
+
+        _info_dict = config["files"].get("info_dict", "")
+        if not _info_dict:
+            raise ValueError("`info_dict` is not present in the supplied config file.")
+
+        with open(self.root_dir / _info_dict, "r") as file:
+            self.info_dict = yaml.safe_load(file)
+
+        self.pipes_dir = self.out_dir / "sed_fitting" / "pipes"
+        self.pipes_dir.mkdir(exist_ok=True, parents=True)
+        if not config["files"].get("atlas_dir", ""):
+            self.atlas_dir = self.pipes_dir / "atlases"
+        else:
+            self.atlas_dir = self.root_dir / config["files"]["atlas_dir"]
+        self.atlas_dir.mkdir(exist_ok=True, parents=True)
+
+        self.binning_kwargs = {
+            "bin_scheme": config["SED"].get("bin_scheme", "colour"),
+            "target_sn": config["SED"].get("target_sn", 10),
+            "bin_diameter": config["SED"].get("bin_diameter", 3),
+            "sn_filter": config["SED"]["sn_filter"],
+            **config["SED"].get("bin_kwargs", {}),
+        }
+
+        self.sed_fit_kwargs = {
+            "z_range": config["SED"].get("z_range", 0.005),
+            "sfh_type": config["SED"].get("sfh_type", "continuity"),
+            "min_age_bin": config["SED"].get("min_age_bin", 20),
+            "num_age_bins": config["SED"].get("num_age_bins", 5),
+            "n_samples": config["SED"].get("n_samples", 1e6),
+            "remake_atlas": config["SED"].get("remake_atlas", False),
+            "n_cores_atlas": config["SED"].get("n_cores_atlas", 4),
+        }
+
+        self.n_cores_atlas_fit = config["SED"].get("n_cores_fit", 4)
+        self.overwrite_atlas_fit = config["SED"].get("overwrite_fit", False)
+
+        self.field_name = config["grism"]["field_name"]
+
+        self.use_stacks = config["grism"].get("use_stacks", True)
+
+        multibeam_kwargs = config["grism"].get("multibeam_kwargs", {})
+
+        default_multib_kwargs = {
+            "min_mask": 0.0,
+            "min_sens": 0.0,
+            "mask_resid": False,
+            "verbose": False,
+            "fcontam": 0.2,
+            "group_name": self.field_name,
+        }
+        self.multibeam_kwargs = recursive_merge(default_multib_kwargs, multibeam_kwargs)
+
+        self.grism_fit_kwargs = {
+            "fit_background": config["grism"].get("fit_background", True),
+            "poly_order": config["grism"].get("poly_order", 0),
+            "n_samples": config["grism"].get("n_region_samples", 3),
+            "n_iters": config["grism"].get("n_iters", 10),
+            "bad_pa_threshold": config["grism"].get("bad_pa_threshold", 1.6),
+            "spec_wavs": config["grism"].get("spec_wavs", None),
+            "oversamp_factor": config["grism"].get("oversamp_factor", 1),
+            "veldisp": config["grism"].get("veldisp", 500),
+            "out_dir": config["grism"].get("out_dir", "multiregion"),
+            "temp_dir": config["grism"].get("temp_dir", None),
+            "memmap": config["grism"].get("memmap", False),
+            "cpu_count": config["grism"].get("cpu_count", -1),
+            "overwrite": config["grism"].get("overwrite", False),
+            "use_lines": config["grism"].get("use_lines", CLOUDY_LINE_MAP),
+            "save_lines": config["grism"].get("save_lines", True),
+            "save_stacks": config["grism"].get("save_stacks", True),
+            "pline": config["grism"].get("pline", DEFAULT_PLINE),
+            "seed": config["grism"].get("seed", 2744),
+            "nnls_method": config["grism"].get("nnls_method", "scipy"),
+            "nnls_iters": config["grism"].get("nnls_iters", 10),
+            "nnls_tol": config["grism"].get("nnls_tol", 1e-5),
+            "n_shifted": config["grism"].get("n_shifted", 2),
+            "n_shifted_samples": config["grism"].get("n_shifted_samples", 1),
+        }
+
+    def fit_atlas(
+        self,
+        atlas_path: PathLike,
+        binned_data_path: PathLike,
+        binned_data_hdu: str | int | None = "PHOT_CAT",
+        bagpipes_atlas_params: dict | None = None,
+        load_fn: Callable | None = None,
+        overwrite_fit: bool = False,
+        id_colname: str = "bin_id",
+        n_cores: int = 4,
+        obj_z: float | ArrayLike | None = None,
+        z_range: float = 0.005,
+    ):
+        """
+        Perform a 2D SED fit to the binned photometric data.
+
+        Parameters
+        ----------
+        atlas_path : PathLike
+            The location of the previously generated model grid.
+        binned_data_path : PathLike
+            The location of the binned photometric catalogue and
+            segmentation map used as input for Bagpipes.
+        binned_data_hdu : str | int | None, optional
+            The identifier of the HDU within ``binned_data_path``
+            containing the photometric catalogue, by default
+            ``"PHOT_CAT"``.
+        bagpipes_atlas_params : dict | None, optional
+            A dictionary containing instructions on the kind of model
+            which should be fitted to the data. This should match the
+            previously generated model grid. If ``None`` (default),
+            ``self.bagpipes_atlas_params`` will be used.
+        load_fn : Callable | None, optional
+            A function which takes the ID as an argument and returns the
+            model photometry. This should be in the form of an array with
+            a column of fluxes in microjanskys and a column of flux errors
+            in the same units. If ``None`` (default),
+            `~bagpipes_extended.pipeline.load_photom_bagpipes` will be
+            used.
+        overwrite_fit : bool, optional
+            If ``True``, then any existing posterior distributions and
+            output catalogues will be overwritten. By default ``False``.
+        id_colname : str, optional
+            The name of the column in the photometric catalogue containing
+            the bin ID, by default ``"bin_id"``.
+        n_cores : int, optional
+            The number of processes to use when fitting the catalogue.
+            If set to ``0``, the code will run on a single process. If set
+            to an integer less than 0, this will run on the number of
+            cores returned by  `multiprocessing.cpu_count`. By default,
+            ``4`` processes will be used.
+        obj_z : float | ArrayLike | None, optional
+            This can be used to override the redshift used for fitting, in
+            case of a mismatch between the model atlas and the object of
+            interest. See `~niriss_tools.grism.MultiRegionFit.gen_atlas`
+            for more details.
+        z_range : float, optional
+            As above.
+        """
+
+        if bagpipes_atlas_params is None:
+            bagpipes_atlas_params = self.bagpipes_atlas_params
+
+        os.chdir(self.pipes_dir)
+
+        if load_fn is None:
+
+            load_fn = partial(
+                load_photom_bagpipes,
+                phot_cat=binned_data_path,
+                cat_hdu_index=binned_data_hdu,
+            )
+
+        fit = AtlasFitter(
+            fit_instructions=bagpipes_atlas_params,
+            atlas_path=atlas_path,
+            out_path=self.pipes_dir.parent,
+            overwrite=overwrite_fit,
+        )
+
+        self.run_name = str(Path(binned_data_path).stem).removesuffix("_data")
+
+        obs_table = Table.read(binned_data_path, hdu=binned_data_hdu)
+        cat_IDs = np.array(obs_table[id_colname])
+
+        catalogue_out_path = fit.out_path / f"{self.run_name}.fits"
+        if (not catalogue_out_path.is_file()) or overwrite_fit:
+
+            fit.fit_catalogue(
+                IDs=cat_IDs,
+                load_data=load_fn,
+                spectrum_exists=False,
+                make_plots=False,
+                cat_filt_list=self.filter_list,
+                run=self.run_name,
+                parallel=n_cores,
+                redshifts=self.obj_z if obj_z is None else obj_z,
+                redshift_range=z_range,
+                n_posterior=500,
+            )
+        else:
+            fit.cat = Table.read(catalogue_out_path)
+
+        self.sed_fit_cat_path = fit.out_path / f"{self.run_name}.fits"
+
+    def gen_atlas(
+        self,
+        obj_z: float | ArrayLike | None = None,
+        z_range: float = 0.005,
+        num_age_bins: int = 5,
+        min_age_bin: float = 20,
+        sfh_type: str = "continuity",
+        n_samples: int | float = 1e6,
+        remake_atlas: bool = False,
+        n_cores_atlas: int = 4,
+    ) -> PathLike:
+        """
+        Generate the fit parameters and model grid.
+
+        This method generates a dictionary of fit parameters for Bagpipes,
+        as well as a large model grid to speed up the SED fitting.
+
+        Parameters
+        ----------
+        obj_z : float | ArrayLike | None, optional
+            The redshift of the object to fit. If a scalar value is
+            passed, and ``z_range==0.0``, the object will be fit to a
+            single redshift value. If ``z_range!=0.0``, this will be the
+            centre of the redshift window. If an array is passed, this
+            explicity sets the redshift range to use for fitting. If
+            ``None`` (default), this will be set to ``self.obj_z``.
+        z_range : float, optional
+            The maximum redshift range to search over, by default 0.005.
+            To fit to a single redshift, pass a single value for
+            ``obj_z``, and set ``z_range=0.0``. If ``obj_z`` is
+            ``ArrayLike``, this parameter is ignored.
+        num_age_bins : int, optional
+            The number of age bins to fit, each of which will have a
+            constant star formation rate following Leja+19. By default,
+            ``5`` bins are generated.
+        min_age_bin : float, optional
+            The minimum age to use for the continuity SFH in Myr, i.e. the
+            first bin will range from ``(0,min_age_bin)``. By default 20.
+        sfh_type : str, optional
+            The type of SFH prior to generate. Currently supports
+            ``"continuity"`` (Leja+19, fixed age bins),
+            ``"continuity_varied_z"`` (Leja+19, only the youngest age bin
+            is fixed), and ``"dblplaw"``.
+        n_samples : int | float, optional
+            The number of samples to generate. By default ``1e6``. A
+            useful number will typically be ``>10^5``.
+        remake_atlas : bool, optional
+            If ``True``, any existing model atlas with the same name will
+            be recreated and overwritten. By default ``False``.
+        n_cores_atlas : int, optional
+            The number of processes to use when generating the model grid.
+            If set to ``0``, the code will run on a single process. If set
+            to an integer less than 0, this will run on the number of
+            cores returned by  `multiprocessing.cpu_count`. By default,
+            ``4`` processes will be used.
+
+        Returns
+        -------
+        PathLike
+            The location of the model atlas.
+        """
+
+        default_filter_dir = (
+            Path(niriss_tools.__file__).parent / "data" / "filter_throughputs"
+        )
+
+        # Create the filter directory; populate as needed
+        filter_dir = self.pipes_dir / "filter_throughputs"
+        filter_dir.mkdir(exist_ok=True, parents=True)
+        for file in default_filter_dir.glob("*.txt"):
+            shutil.copy(file, filter_dir)
+
+        # Create a list of the filters used in our data
+        self.filter_list = []
+        for key in self.info_dict.keys():
+            self.filter_list.append(str(filter_dir / f"{key}.txt"))
+
+        self.bagpipes_atlas_params = generate_fit_params(
+            obj_z=self.obj_z if obj_z is None else obj_z,
+            z_range=z_range,
+            num_age_bins=num_age_bins,
+            sfh_type=sfh_type,
+            min_age_bin=min_age_bin,
+        )
+
+        self.atlas_run_name = (
+            f"z_{self.bagpipes_atlas_params["redshift"][0]}_"
+            f"{self.bagpipes_atlas_params["redshift"][1]}_"
+            f"{n_samples:.2E}"
+        )
+        atlas_path = self.atlas_dir / f"{self.atlas_run_name}.hdf5"
+
+        if not atlas_path.is_file() or remake_atlas:
+
+            atlas_gen = AtlasGenerator(
+                fit_instructions=self.bagpipes_atlas_params,
+                filt_list=self.filter_list,
+                phot_units="ergscma",
+            )
+
+            atlas_gen.gen_samples(n_samples=n_samples, parallel=n_cores_atlas)
+
+            atlas_gen.write_samples(filepath=atlas_path)
+
+        return atlas_path
+
+    def gen_aligned_photometry(
+        self,
+        binning_kwargs: dict,
+        use_stacks: bool = True,
+        beams_path: PathLike | None = None,
+        img_cutout: int = 500,
+        **multibeam_kwargs,
+    ) -> tuple[PathLike, PathLike]:
+        """
+        Align photometric data to the direct image in an extracted beam.
+
+        Parameters
+        ----------
+        binning_kwargs : dict
+            Any arguments to pass to
+            `~niriss_tools.sed.binning.bin_and_save`.
+        use_stacks : bool, optional
+            Whether to fit to individual beams, or beams stacked by filter
+            and grism. By default ``True``.
+        beams_path : PathLike | None, optional
+            The location of a ``*beams.fits`` file to use for fitting. If
+            ``None`` (default), this will be selected automatically based
+            on the ``obj_id`` and directory structure specified in the
+            configuration file.
+        img_cutout : int, optional
+            Make a slice of the original image with size in pixels
+            ``[-cutout,+cutout]`` around the centre of the object, before
+            alignment. By default, ``cutout=500``.
+        **multibeam_kwargs : dict, optional
+            Any additional parameters to pass through to
+            `grizli.multifit.MultiBeam`.
+
+        Returns
+        -------
+        new_beam_path : PathLike
+            The location of the ``*beams.fits`` used for alignment. If
+            ``use_stacks==True``, this will be a stacked version of the
+            input file.
+        binned_data_path : PathLike
+            The location of the binned data in FITS format. This contains
+            both the segmentation map and the binned photometric
+            catalogue.
+
+        Raises
+        ------
+        IOError
+            If no *beams.fits file can be found, this method will raise an
+            error.
+        """
+
+        binned_data_dir = self.out_dir / "binned_data"
+        binned_data_dir.mkdir(exist_ok=True, parents=True)
+
+        new_beam_loc = (
+            binned_data_dir / f"{self.field_name}_{self.obj_id:0>5}.beams.fits"
+        )
+
+        # Give a descriptive name for the binned data
+        binned_name = (
+            f"{self.obj_id}_{binning_kwargs["bin_scheme"]}_"
+            f"{binning_kwargs["bin_diameter"]}_{binning_kwargs["target_sn"]}"
+            f"_{binning_kwargs["sn_filter"]}"
+        )
+        binned_data_path = binned_data_dir / f"{binned_name}_data.fits"
+
+        if not (binned_data_path.is_file() and new_beam_loc.is_file()):
+
+            if beams_path is None:
+
+                beams_path = [
+                    *self.extractions_dir.glob(f"**/*{self.obj_id:0>5}.beams.fits")
+                ]
+                if len(beams_path) >= 1:
+                    beams_path = str(beams_path[0])
+                else:
+                    raise IOError(
+                        f"Original beams file does not exist in {self.extractions_dir}"
+                    )
+
+            if multibeam_kwargs is None:
+                multibeam_kwargs = self.multibeam_kwargs
+
+            if use_stacks:
+                multib = gen_stacked_beams(
+                    beams_path,
+                    **multibeam_kwargs,
+                )
+            else:
+                multib = MultiBeam(
+                    beams_path,
+                    **multibeam_kwargs,
+                )
+
+            # Write the realigned and (stacked?) beam to a file
+            beam_hdul = multib.write_master_fits(get_hdu=True)
+            beam_hdul.writeto(new_beam_loc, overwrite=True)
+
+            # Align all images to the new beam
+            aligned_info_dict = align_direct_images(
+                multib.beams[0],
+                info_dict=self.info_dict,
+                out_dir=binned_data_dir / f"{self.obj_id:0>5}",
+                overwrite=False,
+                cutout=img_cutout,
+            )
+
+            _seg = fits.getdata(new_beam_loc, "SEG")
+            bin_and_save(
+                obj_id=self.obj_id,
+                out_dir=binned_data_dir,
+                seg_map=_seg,
+                info_dict=aligned_info_dict,
+                binned_name=binned_name,
+                **binning_kwargs,
+            )
+
+        return new_beam_loc, binned_data_path
 
     def add_pipes_info(self, header: fits.Header) -> fits.Header:
         """
@@ -124,8 +590,12 @@ class MultiRegionFit:
             "The name of the bagpipes run used to generate the prior templates.",
         )
         header["MRBPPCAT"] = (
-            str(self.binned_data),
+            str(self.binned_data_path),
             "The binned photometric catalogue and segmentation map used as input for bagpipes.",
+        )
+        header["MRBPFCAT"] = (
+            str(self.sed_fit_cat_path),
+            "The bagpipes output fit catalogue.",
         )
         return header
 
@@ -250,6 +720,7 @@ class MultiRegionFit:
         memmap: bool = False,
         id_shifts=None,
         n_shifted_rows=None,
+        return_line_flux=False,
     ):
         seg_id = int(seg_id)
 
@@ -292,14 +763,25 @@ class MultiRegionFit:
                             axis=0,
                         )
 
+            if return_line_flux:
+                line_fluxes = np.zeros(len(samples2d))
+
             for sample_i, sample in enumerate(samples2d):
 
-                temp_resamp_1d = pipes_sampler.sample(
+                out = pipes_sampler.sample(
                     sample,
                     spec_wavs=spec_wavs,
                     cont_only=cont_only,
                     rm_line=rm_line,
+                    return_line_flux=return_line_flux,
                 )
+                if return_line_flux:
+                    temp_resamp_1d, line_flux = out
+                    line_fluxes[sample_i] = (
+                        line_flux * coeffs[f"bin_{seg_id}"][sample_i]
+                    )
+                else:
+                    temp_resamp_1d = out
 
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
@@ -322,6 +804,9 @@ class MultiRegionFit:
 
             if memmap:
                 models_arr.flush()
+
+            if return_line_flux:
+                return line_fluxes
 
         except:
             raise Exception(
@@ -367,8 +852,9 @@ class MultiRegionFit:
         poly_order: int = 0,
         n_samples: int = 3,
         n_iters: int = 10,
+        bad_pa_threshold: float | None = 1.6,
         spec_wavs: ArrayLike | None = None,
-        oversamp_factor: int = 3,
+        oversamp_factor: int = 1,
         veldisp: float = 500,
         direct_images: None = None,
         out_dir: PathLike | None = None,
@@ -386,7 +872,6 @@ class MultiRegionFit:
         nnls_tol: float = 1e-5,
         n_shifted: int = 2,
         n_shifted_samples: int = 1,
-        **grizli_kwargs,
     ):
         """
         Fit the object at a specified redshift.
@@ -406,6 +891,9 @@ class MultiRegionFit:
         n_iters : int, optional
             The number of iterations to perform when fitting, by default
             ``10``.
+        bad_pa_threshold : float | None, optional
+            The threshold for identifying bad PAs before fitting. By
+            default ``1.6``, if ``None`` all beams will be used.
         spec_wavs : ArrayLike | None, optional
             The wavelength sampling to use when generating the template
             spectra from the `bagpipes` posterior distributions. The
@@ -418,7 +906,7 @@ class MultiRegionFit:
             significantly slows down the model generation, but is
             essential to ensure that the template spectra correspond to
             the correct pixels in the NIRISS detector frame, and defaults
-            to a factor of ``3``.
+            to a factor of ``1``.
         veldisp : float, optional
             The velocity dispersion of the template spectra in km/s, by
             default ``500``.
@@ -427,7 +915,7 @@ class MultiRegionFit:
             By default ``None``.
         out_dir : PathLike | None, optional
             Where the output files will be written. If ``None`` (default),
-            the current working directory will be used.
+            files will be written to ``self.out_dir/multiregion``.
         temp_dir : PathLike | None, optional
             The temporary directory to use for memmapped files (if
             ``memmap==True``). If ``None`` (default), the current working
@@ -497,11 +985,6 @@ class MultiRegionFit:
             additional regions (i.e. the total number of samples is given
             by ``n_samples + n_shifted * n_shifted_samples``). By default,
             only 1 sample is drawn from each extra region.
-        **grizli_kwargs : dict, optional
-            A catch-all for previous `grizli` keywords. These are
-            redundant in the multiregion method, and are kept only to
-            avoid keyword argument conflicts with the standard `grizli`
-            function.
 
         Returns
         -------
@@ -530,11 +1013,23 @@ class MultiRegionFit:
                 temp_dir = Path(temp_dir)
                 temp_dir.mkdir(exist_ok=True, parents=True)
 
-        if out_dir is None:
-            out_dir = Path.cwd()
+        if not out_dir:
+            multireg_out_dir = self.out_dir / "multiregion"
         else:
-            out_dir = Path(out_dir)
-            out_dir.mkdir(exist_ok=True, parents=True)
+            multireg_out_dir = Path(out_dir)
+
+        multireg_out_dir.mkdir(exist_ok=True, parents=True)
+
+        if bad_pa_threshold is not None:
+            out = self.MB.check_for_bad_PAs(
+                chi2_threshold=bad_pa_threshold,
+                poly_order=1,
+                reinit=True,
+                fit_background=True,
+            )
+            fit_log, keep_dict, has_bad = out
+            if has_bad:
+                print(f"Has bad PA!  Final list: {keep_dict}\n{fit_log}")
 
         self.MB.init_poly_coeffs(poly_order=poly_order)
 
@@ -779,9 +1274,9 @@ class MultiRegionFit:
         stacked_fit_mask &= np.isfinite(stacked_scif)
 
         # TODO: make the output name a parameter?
-        self.output_table_path = out_dir / (
-            f"{self.id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
+        self.output_table_path = multireg_out_dir / (
+            f"{self.obj_id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
+            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.ecsv"
         )
 
         # The function to produce the templates - only a couple of
@@ -823,7 +1318,7 @@ class MultiRegionFit:
 
         # Construct a zero-length table if it doesn't already exist
         if self.output_table_path.is_file() and not overwrite:
-            output_table = Table.read(self.output_table_path, format="fits")
+            output_table = Table.read(self.output_table_path, format="ascii.ecsv")
         else:
             output_table = Table(
                 [
@@ -859,12 +1354,16 @@ class MultiRegionFit:
                     replace=False,
                 )
                 id_shifts = rng_shifts.choice(
-                    np.arange(self.n_regions, dtype=int), size=n_shifted, replace=False
+                    np.arange(self.n_regions, dtype=int),
+                    size=n_shifted,
+                    replace=False if n_shifted <= self.n_regions else True,
                 )
 
             remaining_iters = n_iters + int(TWO_STAGE) - prev_iters
 
-            output_table.write(self.output_table_path, overwrite=True, format="fits")
+            output_table.write(
+                self.output_table_path, overwrite=True, format="ascii.ecsv"
+            )
 
             iterations = np.arange(prev_iters, n_iters + int(TWO_STAGE))
 
@@ -887,7 +1386,7 @@ class MultiRegionFit:
                     id_shifts = rng_shifts.choice(
                         np.arange(self.n_regions, dtype=int),
                         size=n_shifted,
-                        replace=False,
+                        replace=False if n_shifted <= self.n_regions else True,
                     )
 
                 print(f"Iteration {iteration}, {rows=}")
@@ -1048,6 +1547,43 @@ class MultiRegionFit:
         best_rows = [int(s) for s in output_table["rows"][best_iter]]
         best_id_shifts = [int(s) for s in output_table["id_shifts"][best_iter]]
 
+        # Refill array with best model
+        print("Calculating covariance array...")
+        with multiprocessing.Pool(
+            processes=cpu_count,
+            initializer=_init_pipes_sampler,
+            initargs=(
+                fit_instructions,
+                veldisp,
+                self.MB.beams,
+            ),
+        ) as pool:
+            for s_i, s in enumerate(self.regions_seg_ids):
+                pool.apply_async(
+                    stacked_fn,
+                    (s_i, s),
+                    kwds={"rows": best_rows, "id_shifts": best_id_shifts},
+                    error_callback=print,
+                )
+            pool.close()
+            pool.join()
+
+        stacked_Ax = stacked_A[:, stacked_fit_mask]
+        ok_temp = (np.sum(stacked_Ax, axis=1) > 0) & (out_coeffs != 0)
+        stacked_Ax = stacked_Ax[ok_temp, :].T * 1
+        stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
+
+        try:
+            covar = grizli_utils.safe_invert(np.dot(stacked_Ax.T, stacked_Ax))
+        except:
+            N = ok_temp.sum()
+            covar = np.zeros((N, N))
+
+        covar_diagonal = grizli_utils.fill_masked_covar(covar, ok_temp).diagonal()
+
+        # Ensure that the array is cleaned before repopulating
+        stacked_A[temp_offset:].fill(0.0)
+
         # Largely unmodified from the original grizli code. Included within
         # this particular class method to avoid dealing with SharedMemory
         if save_stacks:
@@ -1067,12 +1603,11 @@ class MultiRegionFit:
                         (s_i, s),
                         kwds={"rows": best_rows, "id_shifts": best_id_shifts},
                         error_callback=print,
-                        # error_callback=traceback.format_exc,
                     )
                 pool.close()
                 pool.join()
 
-            stacked_modelf = np.dot(out_coeffs, stacked_A)  # .copy()
+            stacked_modelf = np.dot(out_coeffs, stacked_A)
 
             stacked_A[temp_offset:].fill(0.0)
 
@@ -1095,12 +1630,11 @@ class MultiRegionFit:
                             "id_shifts": best_id_shifts,
                             "cont_only": True,
                         },
-                        # error_callback=print,
                     )
                 pool.close()
                 pool.join()
 
-            stacked_contf = np.dot(out_coeffs, stacked_A)  # .copy()
+            stacked_contf = np.dot(out_coeffs, stacked_A)
 
             stacked_hdul = fits.HDUList(fits.PrimaryHDU())
 
@@ -1142,7 +1676,6 @@ class MultiRegionFit:
                     h.header["RA"] = (self.ra, "Right ascension")
                     h.header["DEC"] = (self.dec, "Declination")
                     h.header["GRISM"] = (k.split("_")[0], "Grism")
-                    # h.header['ISFLAM'] = (flambda, 'Pixels in f-lam units')
                     h.header["CONF"] = (
                         self.MB.beams[0].beam.conf.conf_file,
                         "Configuration file",
@@ -1155,7 +1688,7 @@ class MultiRegionFit:
                 start_idx += np.prod(v["2d_shape"])
 
             stacked_hdul.writeto(
-                out_dir / f"regions_{self.id:05d}_z_{z}_stacked.fits",
+                multireg_out_dir / f"regions_{self.obj_id:05d}_z_{z}_stacked.fits",
                 output_verify="silentfix",
                 overwrite=True,
             )
@@ -1208,6 +1741,7 @@ class MultiRegionFit:
                 coeffs=output_table[best_iter],
                 memmap=memmap,
                 n_shifted_rows=n_shifted_samples,
+                return_line_flux=True,
             )
 
             for l_i, l_v in enumerate(use_lines):
@@ -1217,66 +1751,90 @@ class MultiRegionFit:
 
                 print(f"Generating map for {l_v["grizli"]}...")
 
-                flat_beam_models.fill(0.0)
+                add_hdu = None
+                for continuum_temp in [True, False]:
 
-                with multiprocessing.Pool(
-                    processes=cpu_count,
-                    initializer=_init_pipes_sampler,
-                    initargs=(fit_instructions, veldisp, self.MB.beams),
-                ) as pool:
-                    for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                        pool.apply_async(
-                            beams_fn,
-                            args=(s_i, s),
-                            kwds={
-                                "rm_line": l_v["cloudy"],
-                                "id_shifts": best_id_shifts,
-                            },
-                            error_callback=print,
-                        )
-                    pool.close()
-                    pool.join()
+                    flat_beam_models.fill(0.0)
 
-                i0 = 0
-                start_idx = 0
-                for k_i, (k, v) in enumerate(beam_info.items()):
-                    for ib in v["list_idx"]:
-                        self.MB.beams[ib].beam.model = flat_beam_models[
-                            i0 : i0 + np.prod(v["2d_shape"])
-                        ].reshape(v["2d_shape"])
-                        i0 += np.prod(v["2d_shape"])
-                    start_idx += np.prod(v["2d_shape"])
+                    results = [None] * self.n_regions
 
-                hdu = drizzle_to_wavelength(
-                    self.MB.beams,
-                    ra=self.ra,
-                    dec=self.dec,
-                    wave=l_v["wave"] * (1 + z),
-                    fcontam=self.MB.fcontam,
-                    **pline,
-                )
+                    with multiprocessing.Pool(
+                        processes=cpu_count,
+                        initializer=_init_pipes_sampler,
+                        initargs=(fit_instructions, veldisp, self.MB.beams),
+                    ) as pool:
+                        for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
+                            results[s_i] = pool.apply_async(
+                                beams_fn,
+                                args=(s_i, s),
+                                kwds={
+                                    "rm_line": (
+                                        l_v["cloudy"] if continuum_temp else None
+                                    ),
+                                    "id_shifts": best_id_shifts,
+                                },
+                                error_callback=print,
+                            )
 
-                hdu[0].header["REDSHIFT"] = (z, "Redshift used")
-                hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
-                hdu[0].header = self.add_pipes_info(hdu[0].header)
-                for e in [-4, -3, -2, -1]:
-                    hdu[e].header["EXTVER"] = l_v["grizli"]
-                    hdu[e].header["REDSHIFT"] = (z, "Redshift used")
-                    hdu[e].header["RESTWAVE"] = (
-                        l_v["wave"],
-                        "Line rest wavelength",
+                        pool.close()
+                        pool.join()
+
+                    i0 = 0
+                    start_idx = 0
+                    for k_i, (k, v) in enumerate(beam_info.items()):
+                        for ib in v["list_idx"]:
+                            self.MB.beams[ib].beam.model = flat_beam_models[
+                                i0 : i0 + np.prod(v["2d_shape"])
+                            ].reshape(v["2d_shape"])
+                            i0 += np.prod(v["2d_shape"])
+                        start_idx += np.prod(v["2d_shape"])
+
+                    if not continuum_temp:
+                        for b_i, (b, b_old) in enumerate(
+                            zip(self.MB.beams, beams_copy)
+                        ):
+                            self.MB.beams[b_i].beam.model -= b_old
+
+                    hdu = drizzle_to_wavelength(
+                        self.MB.beams,
+                        ra=self.ra,
+                        dec=self.dec,
+                        wave=l_v["wave"] * (1 + z),
+                        fcontam=self.MB.fcontam,
+                        **pline,
                     )
+
+                    hdu[0].header["REDSHIFT"] = (z, "Redshift used")
+                    hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
+                    hdu[0].header = self.add_pipes_info(hdu[0].header)
+                    for e in [-4, -3, -2, -1]:
+                        hdu[e].header["EXTVER"] = l_v["grizli"]
+                        hdu[e].header["REDSHIFT"] = (z, "Redshift used")
+                        hdu[e].header["RESTWAVE"] = (
+                            l_v["wave"],
+                            "Line rest wavelength",
+                        )
+
+                    if add_hdu is None:
+                        add_hdu = hdu
+
+                        beams_copy = [b.beam.model.copy() for b in self.MB.beams]
+                    else:
+                        hdu[-3].header["EXTNAME"] = "MODEL"
+                        add_hdu.append(hdu[-3])
+                        line_flux_i = np.nansum(hdu[-3].data) * 1e-17
+                        line_err_i = 0.0
 
                 saved_lines.append(l_v["grizli"])
 
                 if line_hdu is None:
-                    line_hdu = hdu
+                    line_hdu = add_hdu
                     line_hdu[0].header["NUMLINES"] = (
                         1,
                         "Number of lines in this file",
                     )
                 else:
-                    line_hdu.extend(hdu[-4:])
+                    line_hdu.extend(add_hdu[-5:])
                     line_hdu[0].header["NUMLINES"] += 1
 
                     # Make sure DSCI extension is filled.  Can be empty for
@@ -1289,6 +1847,14 @@ class MultiRegionFit:
 
                 li = line_hdu[0].header["NUMLINES"]
                 line_hdu[0].header["LINE{0:03d}".format(li)] = l_v["grizli"]
+                line_hdu[0].header["FLUX{0:03d}".format(li)] = (
+                    line_flux_i,
+                    "Line flux, erg/s/cm2",
+                )
+                line_hdu[0].header["ERR{0:03d}".format(li)] = (
+                    line_err_i,
+                    "Line flux err, erg/s/cm2",
+                )
 
             if line_hdu is not None:
                 line_hdu[0].header["HASLINES"] = (
@@ -1302,31 +1868,50 @@ class MultiRegionFit:
                 line_hdu.insert(1, seg_hdu)
 
                 line_hdu.writeto(
-                    out_dir
-                    / f"regions_{self.id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
+                    multireg_out_dir
+                    / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
                     output_verify="silentfix",
                     overwrite=True,
                 )
 
+                if "DSCI" in line_hdu:
+
+                    from grizli.fitting import show_drizzled_lines
+
+                    # s, si = 1, line_size
+                    s = 4.0e-19 / np.max(
+                        [beam.beam.total_flux for beam in self.MB.beams]
+                    )
+                    s = np.clip(s, 0.25, 4)
+
+                    # s /= (pline["pixscale"] / 0.1) ** 2
+                    s /= (pline.get("pixscale", 0.06) / 0.1) ** 2
+
+                    scale_linemap = 1
+                    dscale = 1.0 / 4
+
+                    fig = show_drizzled_lines(
+                        line_hdu,
+                        size_arcsec=1.5,
+                        cmap="plasma_r",
+                        scale=s * scale_linemap,
+                        dscale=s * dscale * scale_linemap,
+                        full_line_list=[
+                            "Lya",
+                            "OII",
+                            "Hb",
+                            "OIII-5007",
+                            "Ha",
+                            "SII",
+                            "SIII-9068",
+                            "SIII-9531",
+                        ],
+                    )
+                    fig.savefig(
+                        multireg_out_dir
+                        / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.png",
+                    )
+
         smm.shutdown()
 
-        # chi2 = np.nansum(
-        #     (stacked_weightf * (stacked_scif - stacked_modelf) ** 2 * stacked_ivarf)[
-        #         stacked_fit_mask
-        #     ]
-        # )
-
-        if fit_background:
-            poly_coeffs = out_coeffs[num_stacks : num_stacks + self.MB.n_poly]
-        else:
-            poly_coeffs = out_coeffs[: self.MB.n_poly]
-
-        # print(self.n_poly, self.N)
-        # print(num_stacks)
-        # print(f"{out_coeffs=}")
-        # print(poly_coeffs, self.x_poly)
-        self.MB.y_poly = np.dot(poly_coeffs, self.MB.x_poly)
-        # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
-
-        # return A, out_coeffs, chi2, stacked_modelf
         return

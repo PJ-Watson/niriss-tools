@@ -28,7 +28,8 @@ __all__ = [
     "ExtendedModelGalaxy",
     "CLOUDY_LINE_MAP",
     "check_coverage",
-    "NIRISS_FILTER_LIMITS",
+    "NIRISS_050_FILTER_LIMITS",
+    "NIRISS_001_FILTER_LIMITS",
     "BagpipesSampler",
 ]
 
@@ -77,17 +78,17 @@ CLOUDY_LINE_MAP = [
         "grizli": "Hb",
         "wave": 4862.738,
     },
-    {
-        "cloudy": ["H  1  4340.46A"],
-        "grizli": "Hg",
-        "wave": 4341.731,
-    },
-    {
-        "cloudy": ["H  1  4101.73A"],
-        "grizli": "Hd",
-        "wave": 4102.936,
-    },
-    # Oxygen
+    # {
+    #     "cloudy": ["H  1  4340.46A"],
+    #     "grizli": "Hg",
+    #     "wave": 4341.731,
+    # },
+    # {
+    #     "cloudy": ["H  1  4101.73A"],
+    #     "grizli": "Hd",
+    #     "wave": 4102.936,
+    # },
+    # # Oxygen
     {
         "cloudy": [
             "O  3  5006.84A",
@@ -170,15 +171,24 @@ CLOUDY_LINE_MAP = [
 ]
 
 # In Angstroms
-NIRISS_FILTER_LIMITS = {
-    "F090W": [7960, 10050],
+NIRISS_050_FILTER_LIMITS = {
+    # "F090W": [7960, 10050],
     "F115W": [10130, 12830],
     "F150W": [13300, 16710],
     "F200W": [17510, 22260],
 }
 
+NIRISS_001_FILTER_LIMITS = {
+    # "F090W": [7960, 10050],
+    "F115W": [10010, 12930],
+    "F150W": [13200, 16810],
+    "F200W": [17380, 22420],
+}
 
-def check_coverage(obs_wavelength: float, filter_limits: dict = NIRISS_FILTER_LIMITS):
+
+def check_coverage(
+    obs_wavelength: float, filter_limits: dict = NIRISS_001_FILTER_LIMITS
+):
     """
     Check if a line is covered by the NIRISS filters.
 
@@ -916,6 +926,7 @@ class BagpipesSampler(object):
         param_vector: ArrayLike,
         cont_only: bool = False,
         rm_line: list[str] | str | None = None,
+        return_line_flux: bool = False,
         **model_kwargs,
     ) -> ArrayLike:
         """
@@ -934,6 +945,9 @@ class BagpipesSampler(object):
             naming convention (see `here
             <https://bagpipes.readthedocs.io/en/latest/model_galaxies.html#getting-observables-line-fluxes>`__
             for more details). By default ``None``.
+        return_line_flux : bool, optional
+            If ``True``, return the total line flux for all lines named in
+            ``rm_line``. By default ``False``.
         **model_kwargs : dict, optional
             Any additional keyword arguments to pass to
             `~niriss_tools.grism.specgen.ExtendedModelGalaxy`.
@@ -946,13 +960,18 @@ class BagpipesSampler(object):
         """
 
         new_comps = self.update_model_components(param_vector)
-        # if "cont_only" not in model_kwargs:
-        # model_kwargs["cont_only"] = model_kwargs.get("cont_only", False)
-        # model_kwargs["rm_line"] = model_kwargs.get("rm_line", "H  1  6562.81A")
 
         if self.model_gal is None:
             self.model_gal = ExtendedModelGalaxy(new_comps, **model_kwargs)
-        # else:
+
         self.model_gal.update(new_comps, cont_only=cont_only, rm_line=rm_line)
 
-        return self.model_gal.spectrum.T
+        if return_line_flux:
+            line_flux = 0.0
+            if rm_line is not None:
+                rm_line = np.atleast_1d(rm_line).ravel()
+                for rm in rm_line:
+                    line_flux += self.model_gal.line_fluxes[rm]
+            return self.model_gal.spectrum.T, line_flux
+        else:
+            return self.model_gal.spectrum.T

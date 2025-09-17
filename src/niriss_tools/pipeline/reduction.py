@@ -9,7 +9,13 @@ from pathlib import Path
 import astropy
 import numpy as np
 
-__all__ = ["stsci_det1", "run_det1", "gen_associations", "process_using_aws"]
+__all__ = [
+    "stsci_det1",
+    "run_det1",
+    "gen_associations",
+    "process_using_aws",
+    "recursive_merge",
+]
 
 
 def stsci_det1(
@@ -484,7 +490,7 @@ def recursive_merge(d1: dict, d2: dict) -> dict:
         if k in d2:
             # this next check is the only difference!
             if all(isinstance(e, MutableMapping) for e in (v, d2[k])):
-                d2[k] = rec_merge(v, d2[k])
+                d2[k] = recursive_merge(v, d2[k])
             # we could further check types and merge as appropriate here.
     d3 = d1.copy()
     d3.update(d2)
