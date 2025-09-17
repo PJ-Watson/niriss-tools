@@ -91,11 +91,6 @@ class MultiRegionFit:
         obj_id: int,
         obj_z: float,
         run_all: bool = True,
-        # binned_data: PathLike,
-        # pipes_dir: PathLike,
-        # run_name: str,
-        # beams: list,
-        # **multibeam_kwargs,
     ):
 
         self.obj_id = obj_id
@@ -104,39 +99,44 @@ class MultiRegionFit:
         self.import_config(config_path)
 
         if run_all:
-            self.beam_path, self.binned_data_path = self.gen_aligned_photometry(
-                self.binning_kwargs,
-                use_stacks=self.use_stacks,
-                **self.multibeam_kwargs,
-            )
-            self.atlas_path = self.gen_atlas(**self.sed_fit_kwargs)
-            self.fit_atlas(
-                self.atlas_path,
-                self.binned_data_path,
-                overwrite_fit=self.overwrite_atlas_fit,
-                n_cores=self.n_cores_atlas_fit,
-                z_range=self.sed_fit_kwargs["z_range"],
-            )
+            self.run_all()
 
-            self.MB = MultiBeam(beams=str(self.beam_path), **self.multibeam_kwargs)
-            self.ra, self.dec = self.MB.ra, self.MB.dec
+    def run_all(self):
+        """
+        Run the full fit based on the supplied configuration file.
+        """
 
-            self.regions_phot_cat = Table.read(self.binned_data_path, "PHOT_CAT")
-            self.regions_phot_cat = self.regions_phot_cat[
-                self.regions_phot_cat["bin_id"].astype(int) != 0
-            ]
-            self.n_regions = len(self.regions_phot_cat)
+        self.beam_path, self.binned_data_path = self.gen_aligned_photometry(
+            self.binning_kwargs,
+            use_stacks=self.use_stacks,
+            **self.multibeam_kwargs,
+        )
+        self.atlas_path = self.gen_atlas(**self.sed_fit_kwargs)
+        self.fit_atlas(
+            self.atlas_path,
+            self.binned_data_path,
+            overwrite_fit=self.overwrite_atlas_fit,
+            n_cores=self.n_cores_atlas_fit,
+            z_range=self.sed_fit_kwargs["z_range"],
+        )
 
-            with fits.open(self.binned_data_path) as hdul:
-                self.regions_seg_map = hdul["SEG_MAP"].data.copy()
-                self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
-                self.regions_seg_wcs = WCS(self.regions_seg_hdr)
+        self.MB = MultiBeam(beams=str(self.beam_path), **self.multibeam_kwargs)
+        self.ra, self.dec = self.MB.ra, self.MB.dec
 
-            self.regions_seg_ids = np.asarray(
-                self.regions_phot_cat["bin_id"], dtype=int
-            )
+        self.regions_phot_cat = Table.read(self.binned_data_path, "PHOT_CAT")
+        self.regions_phot_cat = self.regions_phot_cat[
+            self.regions_phot_cat["bin_id"].astype(int) != 0
+        ]
+        self.n_regions = len(self.regions_phot_cat)
 
-            self.fit_at_z(self.obj_z, **self.grism_fit_kwargs)
+        with fits.open(self.binned_data_path) as hdul:
+            self.regions_seg_map = hdul["SEG_MAP"].data.copy()
+            self.regions_seg_hdr = hdul["SEG_MAP"].header.copy()
+            self.regions_seg_wcs = WCS(self.regions_seg_hdr)
+
+        self.regions_seg_ids = np.asarray(self.regions_phot_cat["bin_id"], dtype=int)
+
+        self.fit_at_z(self.obj_z, **self.grism_fit_kwargs)
 
     def import_config(self, config_path: PathLike):
         """
@@ -221,6 +221,7 @@ class MultiRegionFit:
             "poly_order": config["grism"].get("poly_order", 0),
             "n_samples": config["grism"].get("n_region_samples", 3),
             "n_iters": config["grism"].get("n_iters", 10),
+            "bad_pa_threshold": config["grism"].get("bad_pa_threshold", 1.6),
             "spec_wavs": config["grism"].get("spec_wavs", None),
             "oversamp_factor": config["grism"].get("oversamp_factor", 1),
             "veldisp": config["grism"].get("veldisp", 500),
@@ -321,17 +322,11 @@ class MultiRegionFit:
             overwrite=overwrite_fit,
         )
 
-        # run_name = (
-        #     f"z_{bagpipes_atlas_params["redshift"][0]}_"
-        #     f"{bagpipes_atlas_params["redshift"][1]}_"
-        #     f"{n_samples:.2E}_aligned"
-        # )
         self.run_name = str(Path(binned_data_path).stem).removesuffix("_data")
 
         obs_table = Table.read(binned_data_path, hdu=binned_data_hdu)
         cat_IDs = np.array(obs_table[id_colname])
 
-        # catalogue_out_path = fit.out_path / Path(f"{binned_name}_{run_name}.fits")
         catalogue_out_path = fit.out_path / f"{self.run_name}.fits"
         if (not catalogue_out_path.is_file()) or overwrite_fit:
 
@@ -350,6 +345,8 @@ class MultiRegionFit:
             # print(fit.cat)
         else:
             fit.cat = Table.read(catalogue_out_path)
+
+        self.sed_fit_cat_path = fit.out_path / f"{self.run_name}.fits"
 
     def gen_atlas(
         self,
@@ -437,8 +434,8 @@ class MultiRegionFit:
         )
 
         self.atlas_run_name = (
-            f"z_{self.bagpipes_atlas_params["redshift"][0]:.4f}_"
-            f"{self.bagpipes_atlas_params["redshift"][1]:.4f}_"
+            f"z_{self.bagpipes_atlas_params["redshift"][0]}_"
+            f"{self.bagpipes_atlas_params["redshift"][1]}_"
             f"{n_samples:.2E}"
         )
         atlas_path = self.atlas_dir / f"{self.atlas_run_name}.hdf5"
@@ -597,6 +594,10 @@ class MultiRegionFit:
         header["MRBPPCAT"] = (
             str(self.binned_data_path),
             "The binned photometric catalogue and segmentation map used as input for bagpipes.",
+        )
+        header["MRBPFCAT"] = (
+            str(self.sed_fit_cat_path),
+            "The bagpipes output fit catalogue.",
         )
         return header
 
@@ -778,12 +779,15 @@ class MultiRegionFit:
                 )
                 if return_line_flux:
                     temp_resamp_1d, line_flux = out
-                    line_fluxes[sample_i] = line_flux
+                    line_fluxes[sample_i] = (
+                        line_flux * coeffs[f"bin_{seg_id}"][sample_i]
+                    )
                 else:
                     temp_resamp_1d = out
 
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
+                    # print (k, v)
                     for ib in v["list_idx"]:
                         if seg_maps.ndim == 3:
                             beam_seg = seg_maps[ib] == seg_id
@@ -800,6 +804,8 @@ class MultiRegionFit:
                         )
 
                         i0 += np.prod(v["2d_shape"])
+
+                # line_fluxes[sample_i] /= np.nansum(beams_object[ib].beam.direct * beam_seg)
 
             if memmap:
                 models_arr.flush()
@@ -851,6 +857,7 @@ class MultiRegionFit:
         poly_order: int = 0,
         n_samples: int = 3,
         n_iters: int = 10,
+        bad_pa_threshold: float | None = 1.6,
         spec_wavs: ArrayLike | None = None,
         oversamp_factor: int = 1,
         veldisp: float = 500,
@@ -889,6 +896,9 @@ class MultiRegionFit:
         n_iters : int, optional
             The number of iterations to perform when fitting, by default
             ``10``.
+        bad_pa_threshold : float | None, optional
+            The threshold for identifying bad PAs before fitting. By
+            default ``1.6``, if ``None`` all beams will be used.
         spec_wavs : ArrayLike | None, optional
             The wavelength sampling to use when generating the template
             spectra from the `bagpipes` posterior distributions. The
@@ -1014,6 +1024,17 @@ class MultiRegionFit:
             multireg_out_dir = Path(out_dir)
 
         multireg_out_dir.mkdir(exist_ok=True, parents=True)
+
+        if bad_pa_threshold is not None:
+            out = self.MB.check_for_bad_PAs(
+                chi2_threshold=bad_pa_threshold,
+                poly_order=1,
+                reinit=True,
+                fit_background=True,
+            )
+            fit_log, keep_dict, has_bad = out
+            if has_bad:
+                print(f"Has bad PA!  Final list: {keep_dict}\n{fit_log}")
 
         self.MB.init_poly_coeffs(poly_order=poly_order)
 
@@ -1260,7 +1281,8 @@ class MultiRegionFit:
         # TODO: make the output name a parameter?
         self.output_table_path = multireg_out_dir / (
             f"{self.obj_id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
+            # f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
+            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.ecsv"
         )
 
         # The function to produce the templates - only a couple of
@@ -1302,7 +1324,8 @@ class MultiRegionFit:
 
         # Construct a zero-length table if it doesn't already exist
         if self.output_table_path.is_file() and not overwrite:
-            output_table = Table.read(self.output_table_path, format="fits")
+            # output_table = Table.read(self.output_table_path, format="fits")
+            output_table = Table.read(self.output_table_path, format="ascii.ecsv")
         else:
             output_table = Table(
                 [
@@ -1338,12 +1361,17 @@ class MultiRegionFit:
                     replace=False,
                 )
                 id_shifts = rng_shifts.choice(
-                    np.arange(self.n_regions, dtype=int), size=n_shifted, replace=False
+                    np.arange(self.n_regions, dtype=int),
+                    size=n_shifted,
+                    replace=False if n_shifted <= self.n_regions else True,
                 )
 
             remaining_iters = n_iters + int(TWO_STAGE) - prev_iters
 
-            output_table.write(self.output_table_path, overwrite=True, format="fits")
+            # output_table.write(self.output_table_path, overwrite=True, format="fits")
+            output_table.write(
+                self.output_table_path, overwrite=True, format="ascii.ecsv"
+            )
 
             iterations = np.arange(prev_iters, n_iters + int(TWO_STAGE))
 
@@ -1366,7 +1394,7 @@ class MultiRegionFit:
                     id_shifts = rng_shifts.choice(
                         np.arange(self.n_regions, dtype=int),
                         size=n_shifted,
-                        replace=False,
+                        replace=False if n_shifted <= self.n_regions else True,
                     )
 
                 print(f"Iteration {iteration}, {rows=}")
@@ -1740,7 +1768,8 @@ class MultiRegionFit:
 
                     flat_beam_models.fill(0.0)
 
-                    results = []
+                    # results = np.zeros((self.n_regions, n_samples + (n_shifted * n_shifted_samples)))
+                    results = [None] * self.n_regions
 
                     with multiprocessing.Pool(
                         processes=cpu_count,
@@ -1748,39 +1777,47 @@ class MultiRegionFit:
                         initargs=(fit_instructions, veldisp, self.MB.beams),
                     ) as pool:
                         for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                            results.append(
-                                pool.apply_async(
-                                    beams_fn,
-                                    args=(s_i, s),
-                                    kwds={
-                                        "rm_line": (
-                                            l_v["cloudy"] if continuum_temp else None
-                                        ),
-                                        "id_shifts": best_id_shifts,
-                                    },
-                                    error_callback=print,
-                                )
+                            # results.append(
+                            results[s_i] = pool.apply_async(
+                                beams_fn,
+                                args=(s_i, s),
+                                kwds={
+                                    "rm_line": (
+                                        l_v["cloudy"] if continuum_temp else None
+                                    ),
+                                    "id_shifts": best_id_shifts,
+                                },
+                                error_callback=print,
                             )
 
                         pool.close()
                         pool.join()
 
-                    if continuum_temp:
-                        line_fluxes = np.array([r.get() for r in results]).flatten()
+                    # if continuum_temp:
+                    #     # line_fluxes = np.zeros(len(out_coeffs[temp_offset:]))
+                    #     _res = np.array([r.get() for r in results])
+                    #     # print (_res)
+                    #     # print (_res.flatten())
+                    #     # exit()
+                    #     line_fluxes = np.array([r.get() for r in results]).flatten(order="F")
 
-                        # Probably belongs better elsewhere, but need to convert to correct units
-                        flux_scale_factor = 1e-2
-                        line_flux_i = (
-                            np.nansum(line_fluxes * out_coeffs[temp_offset:])
-                            * flux_scale_factor
-                        )
-                        line_err_i = (
-                            np.sqrt(
-                                np.nansum(line_fluxes**2 * covar_diagonal[temp_offset:])
-                            )
-                            * flux_scale_factor
-                        )
-                        print(f"Flux: {line_flux_i:.3E} +- {line_err_i:.3E}")
+                    #     # Probably belongs better elsewhere, but need to convert to correct units
+                    #     flux_scale_factor = 1 #1e-2
+                    #     line_flux_i = (
+                    #         # np.nansum(line_fluxes * out_coeffs[temp_offset:])
+                    #         np.nansum(line_fluxes)# * out_coeffs[temp_offset:])
+                    #         * flux_scale_factor
+                    #     )
+                    #     line_err_i = (
+                    #         np.sqrt(
+                    #             np.nansum(line_fluxes**2 * covar_diagonal[temp_offset:])
+                    #         )
+                    #         * flux_scale_factor
+                    #     )
+                    #     print(f"Flux: {line_flux_i:.3E} +- {line_err_i:.3E}")
+                    #     # exit()
+
+                    # print (np.nansum(flat_beam_models))
 
                     i0 = 0
                     start_idx = 0
@@ -1791,6 +1828,12 @@ class MultiRegionFit:
                             ].reshape(v["2d_shape"])
                             i0 += np.prod(v["2d_shape"])
                         start_idx += np.prod(v["2d_shape"])
+
+                    if not continuum_temp:
+                        for b_i, (b, b_old) in enumerate(
+                            zip(self.MB.beams, beams_copy)
+                        ):
+                            self.MB.beams[b_i].beam.model -= b_old
 
                     hdu = drizzle_to_wavelength(
                         self.MB.beams,
@@ -1814,11 +1857,29 @@ class MultiRegionFit:
 
                     if add_hdu is None:
                         add_hdu = hdu
+
+                        beams_copy = [b.beam.model.copy() for b in self.MB.beams]
                     else:
+                        # print (f"Model: {np.nansum(hdu[-3].data):.3f}, ratio: {line_flux_i / (np.nansum(hdu[-3].data)*1e-17):.3f}")
                         hdu[-3].header["EXTNAME"] = "MODEL"
                         add_hdu.append(hdu[-3])
+                        line_flux_i = np.nansum(hdu[-3].data) * 1e-17
+                        line_err_i = 0.0
 
+                        # import matplotlib.pyplot as plt
+
+                        # fig, axs =plt.subplots(6,3)
+                        # diff = 0
+                        # for b_i, (b, b_old) in enumerate(zip(self.MB.beams, beams_copy)):
+                        #     axs[ b_i, 0].imshow(b.beam.model)
+                        #     axs[b_i,1].imshow(b_old)
+                        #     axs[ b_i,2].imshow(b.beam.model-b_old)
+                        #     diff+= np.nansum(b.beam.model-b_old)
+                        # print(diff)
+                        # plt.show()
                 saved_lines.append(l_v["grizli"])
+
+                # exit()
 
                 if line_hdu is None:
                     line_hdu = add_hdu
@@ -1867,7 +1928,49 @@ class MultiRegionFit:
                     overwrite=True,
                 )
 
+                if "DSCI" in line_hdu:
+
+                    from grizli.fitting import show_drizzled_lines
+
+                    # s, si = 1, line_size
+                    s = 4.0e-19 / np.max(
+                        [beam.beam.total_flux for beam in self.MB.beams]
+                    )
+                    s = np.clip(s, 0.25, 4)
+
+                    # s /= (pline["pixscale"] / 0.1) ** 2
+                    s /= (0.06 / 0.1) ** 2
+
+                    scale_linemap = 1
+                    dscale = 1.0 / 4
+
+                    fig = show_drizzled_lines(
+                        line_hdu,
+                        size_arcsec=1.5,
+                        cmap="plasma_r",
+                        scale=s * scale_linemap,
+                        dscale=s * dscale * scale_linemap,
+                        full_line_list=[
+                            "Lya",
+                            "OII",
+                            "Hb",
+                            "OIII-5007",
+                            "Ha",
+                            "SII",
+                            "SIII-9068",
+                            "SIII-9531",
+                        ],
+                    )
+                    fig.savefig(
+                        multireg_out_dir
+                        / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.png",
+                    )
+                    # if save_figures:
+                    # fig.savefig("{0}_{1:05}.line.{2}".format(group_name, id, fig_type))
+
         smm.shutdown()
+
+        return
 
         # chi2 = np.nansum(
         #     (stacked_weightf * (stacked_scif - stacked_modelf) ** 2 * stacked_ivarf)[
@@ -1875,17 +1978,17 @@ class MultiRegionFit:
         #     ]
         # )
 
-        if fit_background:
-            poly_coeffs = out_coeffs[num_stacks : num_stacks + self.MB.n_poly]
-        else:
-            poly_coeffs = out_coeffs[: self.MB.n_poly]
+        # if fit_background:
+        #     poly_coeffs = out_coeffs[num_stacks : num_stacks + self.MB.n_poly]
+        # else:
+        #     poly_coeffs = out_coeffs[: self.MB.n_poly]
 
-        # print(self.n_poly, self.N)
-        # print(num_stacks)
-        # print(f"{out_coeffs=}")
-        # print(poly_coeffs, self.x_poly)
-        self.MB.y_poly = np.dot(poly_coeffs, self.MB.x_poly)
-        # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
+        # # print(self.n_poly, self.N)
+        # # print(num_stacks)
+        # # print(f"{out_coeffs=}")
+        # # print(poly_coeffs, self.x_poly)
+        # self.MB.y_poly = np.dot(poly_coeffs, self.MB.x_poly)
+        # # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
 
-        # return A, out_coeffs, chi2, stacked_modelf
-        return
+        # # return A, out_coeffs, chi2, stacked_modelf
+        # return
