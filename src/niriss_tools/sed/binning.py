@@ -595,13 +595,16 @@ def bin_and_save(
     noise = np.sqrt(fits.getdata(info_dict[sn_filter]["var"]))[obj_img_idxs]
 
     if bin_scheme == "colour":
+        orig_images = []
+        for k, v in info_dict.items():
+            orig_images.append(fits.getdata(v["sci"])[obj_img_idxs])
         bin_labels, nbins, bin_sn, bin_inv = colour_binning.colour_aggregate(
-            info_dict=info_dict,
+            orig_images=orig_images,
             signal=signal,
             noise=noise,
             target_sn=target_sn,
             mask=seg_map[obj_img_idxs] != obj_id,
-            crop=obj_img_idxs,
+            # crop=obj_img_idxs,
             **bin_kwargs,
         )
     else:

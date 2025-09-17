@@ -16,14 +16,13 @@ from tqdm import tqdm
 
 
 def colour_aggregate(
-    info_dict: dict,
+    orig_images: ArrayLike,
     signal: ArrayLike,
     noise: ArrayLike,
     target_sn: float = 100,
     plot: bool = False,
     quiet: bool = False,
     mask: ArrayLike | None = None,
-    crop: tuple | None = None,
     **kwargs,
 ) -> tuple[ArrayLike, int, ArrayLike, ArrayLike]:
     """
@@ -34,14 +33,10 @@ def colour_aggregate(
 
     Parameters
     ----------
-    info_dict : dict
-        A dictionary containing all information on the images to be used
-        when binning and generating the photometric catalogue. The keys of
-        the dictionary should correspond to the names of the filters (or
-        any desired column name in the output catalogue), and each entry
-        should itself contain a ``dict``, with the keys ``sci`` and
-        ``var`` describing the locations of the PSF-matched science and
-        variance images.
+    orig_images : ArrayLike
+        A 3D array, or list of arrays. Each slice of the array along
+        ``axis=0`` should be a different photometric band, with the same
+        shape and alignment as the ``signal`` and ``noise`` arrays.
     signal : ArrayLike
         A 2D array containing the signal to be binned.
     noise : ArrayLike
@@ -59,9 +54,6 @@ def colour_aggregate(
     mask : ArrayLike | None, optional
         Values in the input signal and noise to mask out, i.e. where
         ``mask==True`` will not be included in the binned data.
-    crop : tuple | None, optional
-        The crop to be applied to the original images to match the shape
-        of ``signal``.
     **kwargs : dict, optional
         A catch-all for additional parameters not relevant for this
         binning scheme.
@@ -86,14 +78,17 @@ def colour_aggregate(
     f_signal = signal.ravel()
     f_noise = noise.ravel()
     if mask is None:
-        f_mask = np.zeros_like(f_noise)
+        f_mask = np.zeros_like(f_noise, dtype=bool)
     else:
         f_mask = mask.ravel()
 
-    orig_images = []
-    for k, v in info_dict.items():
-        orig_images.append(fits.getdata(v["sci"])[crop])
+    f_mask |= ~np.isfinite(f_signal)
+    f_mask |= ~np.isfinite(f_noise)
+    f_mask |= f_noise <= 0
+
     f_orig_images = np.array(orig_images).reshape(len(orig_images), -1)
+
+    f_mask |= np.any(np.isnan(f_orig_images), axis=0)
 
     all_colours = permute_axes_subtract(f_orig_images)
     f_colours = all_colours[np.triu_indices(all_colours.shape[0], k=1)]
@@ -133,7 +128,6 @@ def colour_aggregate(
                     break
             if not avail_idxs.any():
                 break
-            # print ("MID", np.nansum(avail_idxs), avail_idxs.any())
 
             d, poss_idxs = kd.query(
                 m_C[curr_bin_idxs[-1]], k=len(avail_idxs), workers=-1
@@ -142,17 +136,9 @@ def colour_aggregate(
             filtered = avail_idxs[poss_idxs]
             filtered_idxs = poss_idxs[filtered]
 
-            # try:
             curr_bin_idxs.append(filtered_idxs[0])
-            # except:
-            #     print (filtered_idxs)
-            #     print (poss_idxs)
-            #     print (avail_idxs)
-            #     print (np.nansum(avail_idxs))
-            #     print (avail_idxs.any())
-            #     print ("testing")
+
             avail_idxs[filtered_idxs[0]] = False
-            # print ("END", np.nansum(avail_idxs), avail_idxs.any())
 
             progress.update()
 
