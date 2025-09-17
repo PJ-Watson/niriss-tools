@@ -342,7 +342,6 @@ class MultiRegionFit:
                 redshift_range=z_range,
                 n_posterior=500,
             )
-            # print(fit.cat)
         else:
             fit.cat = Table.read(catalogue_out_path)
 
@@ -563,8 +562,7 @@ class MultiRegionFit:
             _seg = fits.getdata(new_beam_loc, "SEG")
             bin_and_save(
                 obj_id=self.obj_id,
-                out_dir=binned_data_dir,  # / f"{obj_id:0>5}",
-                # seg_map=multib.beams[0].beam.seg,
+                out_dir=binned_data_dir,
                 seg_map=_seg,
                 info_dict=aligned_info_dict,
                 binned_name=binned_name,
@@ -787,7 +785,6 @@ class MultiRegionFit:
 
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
-                    # print (k, v)
                     for ib in v["list_idx"]:
                         if seg_maps.ndim == 3:
                             beam_seg = seg_maps[ib] == seg_id
@@ -804,8 +801,6 @@ class MultiRegionFit:
                         )
 
                         i0 += np.prod(v["2d_shape"])
-
-                # line_fluxes[sample_i] /= np.nansum(beams_object[ib].beam.direct * beam_seg)
 
             if memmap:
                 models_arr.flush()
@@ -1281,7 +1276,6 @@ class MultiRegionFit:
         # TODO: make the output name a parameter?
         self.output_table_path = multireg_out_dir / (
             f"{self.obj_id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            # f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.fits"
             f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.ecsv"
         )
 
@@ -1324,7 +1318,6 @@ class MultiRegionFit:
 
         # Construct a zero-length table if it doesn't already exist
         if self.output_table_path.is_file() and not overwrite:
-            # output_table = Table.read(self.output_table_path, format="fits")
             output_table = Table.read(self.output_table_path, format="ascii.ecsv")
         else:
             output_table = Table(
@@ -1368,7 +1361,6 @@ class MultiRegionFit:
 
             remaining_iters = n_iters + int(TWO_STAGE) - prev_iters
 
-            # output_table.write(self.output_table_path, overwrite=True, format="fits")
             output_table.write(
                 self.output_table_path, overwrite=True, format="ascii.ecsv"
             )
@@ -1572,7 +1564,6 @@ class MultiRegionFit:
                     (s_i, s),
                     kwds={"rows": best_rows, "id_shifts": best_id_shifts},
                     error_callback=print,
-                    # error_callback=traceback.format_exc,
                 )
             pool.close()
             pool.join()
@@ -1612,12 +1603,11 @@ class MultiRegionFit:
                         (s_i, s),
                         kwds={"rows": best_rows, "id_shifts": best_id_shifts},
                         error_callback=print,
-                        # error_callback=traceback.format_exc,
                     )
                 pool.close()
                 pool.join()
 
-            stacked_modelf = np.dot(out_coeffs, stacked_A)  # .copy()
+            stacked_modelf = np.dot(out_coeffs, stacked_A)
 
             stacked_A[temp_offset:].fill(0.0)
 
@@ -1640,12 +1630,11 @@ class MultiRegionFit:
                             "id_shifts": best_id_shifts,
                             "cont_only": True,
                         },
-                        # error_callback=print,
                     )
                 pool.close()
                 pool.join()
 
-            stacked_contf = np.dot(out_coeffs, stacked_A)  # .copy()
+            stacked_contf = np.dot(out_coeffs, stacked_A)
 
             stacked_hdul = fits.HDUList(fits.PrimaryHDU())
 
@@ -1687,7 +1676,6 @@ class MultiRegionFit:
                     h.header["RA"] = (self.ra, "Right ascension")
                     h.header["DEC"] = (self.dec, "Declination")
                     h.header["GRISM"] = (k.split("_")[0], "Grism")
-                    # h.header['ISFLAM'] = (flambda, 'Pixels in f-lam units')
                     h.header["CONF"] = (
                         self.MB.beams[0].beam.conf.conf_file,
                         "Configuration file",
@@ -1768,7 +1756,6 @@ class MultiRegionFit:
 
                     flat_beam_models.fill(0.0)
 
-                    # results = np.zeros((self.n_regions, n_samples + (n_shifted * n_shifted_samples)))
                     results = [None] * self.n_regions
 
                     with multiprocessing.Pool(
@@ -1777,7 +1764,6 @@ class MultiRegionFit:
                         initargs=(fit_instructions, veldisp, self.MB.beams),
                     ) as pool:
                         for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                            # results.append(
                             results[s_i] = pool.apply_async(
                                 beams_fn,
                                 args=(s_i, s),
@@ -1792,32 +1778,6 @@ class MultiRegionFit:
 
                         pool.close()
                         pool.join()
-
-                    # if continuum_temp:
-                    #     # line_fluxes = np.zeros(len(out_coeffs[temp_offset:]))
-                    #     _res = np.array([r.get() for r in results])
-                    #     # print (_res)
-                    #     # print (_res.flatten())
-                    #     # exit()
-                    #     line_fluxes = np.array([r.get() for r in results]).flatten(order="F")
-
-                    #     # Probably belongs better elsewhere, but need to convert to correct units
-                    #     flux_scale_factor = 1 #1e-2
-                    #     line_flux_i = (
-                    #         # np.nansum(line_fluxes * out_coeffs[temp_offset:])
-                    #         np.nansum(line_fluxes)# * out_coeffs[temp_offset:])
-                    #         * flux_scale_factor
-                    #     )
-                    #     line_err_i = (
-                    #         np.sqrt(
-                    #             np.nansum(line_fluxes**2 * covar_diagonal[temp_offset:])
-                    #         )
-                    #         * flux_scale_factor
-                    #     )
-                    #     print(f"Flux: {line_flux_i:.3E} +- {line_err_i:.3E}")
-                    #     # exit()
-
-                    # print (np.nansum(flat_beam_models))
 
                     i0 = 0
                     start_idx = 0
@@ -1860,26 +1820,12 @@ class MultiRegionFit:
 
                         beams_copy = [b.beam.model.copy() for b in self.MB.beams]
                     else:
-                        # print (f"Model: {np.nansum(hdu[-3].data):.3f}, ratio: {line_flux_i / (np.nansum(hdu[-3].data)*1e-17):.3f}")
                         hdu[-3].header["EXTNAME"] = "MODEL"
                         add_hdu.append(hdu[-3])
                         line_flux_i = np.nansum(hdu[-3].data) * 1e-17
                         line_err_i = 0.0
 
-                        # import matplotlib.pyplot as plt
-
-                        # fig, axs =plt.subplots(6,3)
-                        # diff = 0
-                        # for b_i, (b, b_old) in enumerate(zip(self.MB.beams, beams_copy)):
-                        #     axs[ b_i, 0].imshow(b.beam.model)
-                        #     axs[b_i,1].imshow(b_old)
-                        #     axs[ b_i,2].imshow(b.beam.model-b_old)
-                        #     diff+= np.nansum(b.beam.model-b_old)
-                        # print(diff)
-                        # plt.show()
                 saved_lines.append(l_v["grizli"])
-
-                # exit()
 
                 if line_hdu is None:
                     line_hdu = add_hdu
@@ -1939,7 +1885,7 @@ class MultiRegionFit:
                     s = np.clip(s, 0.25, 4)
 
                     # s /= (pline["pixscale"] / 0.1) ** 2
-                    s /= (0.06 / 0.1) ** 2
+                    s /= (pline.get("pixscale", 0.06) / 0.1) ** 2
 
                     scale_linemap = 1
                     dscale = 1.0 / 4
@@ -1965,30 +1911,7 @@ class MultiRegionFit:
                         multireg_out_dir
                         / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.png",
                     )
-                    # if save_figures:
-                    # fig.savefig("{0}_{1:05}.line.{2}".format(group_name, id, fig_type))
 
         smm.shutdown()
 
         return
-
-        # chi2 = np.nansum(
-        #     (stacked_weightf * (stacked_scif - stacked_modelf) ** 2 * stacked_ivarf)[
-        #         stacked_fit_mask
-        #     ]
-        # )
-
-        # if fit_background:
-        #     poly_coeffs = out_coeffs[num_stacks : num_stacks + self.MB.n_poly]
-        # else:
-        #     poly_coeffs = out_coeffs[: self.MB.n_poly]
-
-        # # print(self.n_poly, self.N)
-        # # print(num_stacks)
-        # # print(f"{out_coeffs=}")
-        # # print(poly_coeffs, self.x_poly)
-        # self.MB.y_poly = np.dot(poly_coeffs, self.MB.x_poly)
-        # # x_poly = self.x_poly[1,:]+1 = self.beams[0].beam.lam/1.e4
-
-        # # return A, out_coeffs, chi2, stacked_modelf
-        # return
