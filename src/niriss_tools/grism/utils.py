@@ -151,6 +151,9 @@ def gen_stacked_beams(
 
             grism_data = [mb.beams[i].grism.data["SCI"] for i in beam_idxs]
             direct_data = [mb.beams[i].beam.direct for i in beam_idxs]
+            direct_data = [mb.beams[i].direct.data["REF"] for i in beam_idxs]
+
+            dir_scale = np.nanmedian(new_beam.direct.data["REF"] / new_beam.beam.direct)
 
             new_seg = grizli_utils.blot_nearest_exact(
                 mb.beams[beam_idxs[0]].beam.seg,
@@ -316,6 +319,9 @@ def gen_stacked_beams(
                 min_sens=mb.min_sens,
                 mask_resid=mb.mask_resid,
             )
+
+            new_beam.direct.data["REF"] /= dir_scale
+            new_beam.direct.ref_photflam = new_beam.direct.photflam
 
             new_beam_list.append(new_beam)
 

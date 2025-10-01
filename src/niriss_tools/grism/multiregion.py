@@ -11,7 +11,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from functools import partial
 from itertools import product
-from multiprocessing import Manager, Pool, cpu_count, shared_memory
+from multiprocessing import Lock, Manager, Pool, cpu_count, shared_memory
 from multiprocessing.managers import SharedMemoryManager
 from os import PathLike
 from pathlib import Path
@@ -58,11 +58,13 @@ DEFAULT_PLINE = {
 }
 
 
-def _init_pipes_sampler(fit_instructions, veldisp, beams):
+def _init_pipes_sampler(fit_instructions, veldisp, beams, lock_value=None):
     global pipes_sampler
     pipes_sampler = BagpipesSampler(fit_instructions=fit_instructions, veldisp=veldisp)
     global beams_object
-    beams_object = beams.copy()
+    beams_object = deepcopy(beams)
+    global lock_var
+    lock_var = lock_value
 
 
 class MultiRegionFit:
@@ -790,15 +792,17 @@ class MultiRegionFit:
                             beam_seg = seg_maps[ib] == seg_id
                         else:
                             beam_seg = seg_maps[seg_idx][ib]
-                        tmodel = beams_object[ib].compute_model(
-                            spectrum_1d=temp_resamp_1d,
-                            thumb=beams_object[ib].beam.direct * beam_seg,
-                            in_place=False,
-                            is_cgs=True,
+                        tmodel = (
+                            beams_object[ib].compute_model(
+                                spectrum_1d=temp_resamp_1d,
+                                thumb=beams_object[ib].beam.direct * beam_seg,
+                                in_place=False,
+                                is_cgs=True,
+                            )
+                            * coeffs[f"bin_{seg_id}"][sample_i]
                         )
-                        models_arr[i0 : i0 + np.prod(v["2d_shape"])] += (
-                            coeffs[f"bin_{seg_id}"][sample_i] * tmodel
-                        )
+                        with lock_var:
+                            models_arr[i0 : i0 + np.prod(v["2d_shape"])] += tmodel
 
                         i0 += np.prod(v["2d_shape"])
 
@@ -1016,7 +1020,7 @@ class MultiRegionFit:
         if not out_dir:
             multireg_out_dir = self.out_dir / "multiregion"
         else:
-            multireg_out_dir = Path(out_dir)
+            multireg_out_dir = self.out_dir / Path(out_dir)
 
         multireg_out_dir.mkdir(exist_ok=True, parents=True)
 
@@ -1039,10 +1043,6 @@ class MultiRegionFit:
         else:
             self.fit_bg = False
             A = self.MB.A_poly * 1
-
-        # Two RNG, so can compare with and without extra shift samples
-        rng = np.random.default_rng(seed=seed)
-        rng_shifts = np.random.default_rng(seed=seed)
 
         with h5py.File(
             self.pipes_dir
@@ -1272,6 +1272,7 @@ class MultiRegionFit:
             start_idx += np.prod(v["2d_shape"])
 
         stacked_fit_mask &= np.isfinite(stacked_scif)
+        DoF = int((stacked_weightf * stacked_fit_mask).sum())
 
         # TODO: make the output name a parameter?
         self.output_table_path = multireg_out_dir / (
@@ -1314,6 +1315,9 @@ class MultiRegionFit:
             "rows",
             "id_shifts",
             "n_shifted_samples",
+            "fitting_time",
+            "total_time",
+            "unique_temp",
         ]
 
         # Construct a zero-length table if it doesn't already exist
@@ -1322,11 +1326,10 @@ class MultiRegionFit:
         else:
             output_table = Table(
                 [
-                    [0],
-                    *np.zeros((len(init_col_names) - 4, 1)),
+                    *np.zeros((5, 1)),
                     np.zeros((1, n_samples), dtype=int),
                     np.zeros((1, n_shifted), dtype=int),
-                    [0],
+                    *np.zeros((4, 1)),
                     *np.zeros((temp_offset, 1)),
                     *np.zeros(
                         (self.n_regions, 1, n_samples + (n_shifted * n_shifted_samples))
@@ -1335,11 +1338,25 @@ class MultiRegionFit:
                 names=init_col_names
                 + [f"base_coeffs_{b}" for b in np.arange(temp_offset)]
                 + [f"bin_{p}" for p in self.regions_phot_cat["bin_id"]],
-                dtype=[int, float, int, int, float, int, int, int]
+                dtype=[int, float, int, int, float, int, int, int, float, float, int]
                 + [float] * temp_offset
                 + [float] * self.n_regions,
             )
             output_table = output_table[:0]
+
+        # Check if seed was previously set, write to table if not
+        seed = output_table.meta.get("RNGSEED", [seed])[0]
+        output_table.meta["RNGSEED"] = (seed, "Random seed")
+
+        output_table.meta["ID"] = (self.obj_id, "Object ID")
+        output_table.meta["RA"] = (self.ra, "Right Ascension")
+        output_table.meta["DEC"] = (self.dec, "Declination")
+        output_table.meta["Z"] = (z, "Best-fit redshift")
+        output_table.meta["DOF"] = (DoF, "Degrees of freedom (active pixels)")
+
+        # Two RNG, so can compare with and without extra shift samples
+        rng = np.random.default_rng(seed=seed)
+        rng_shifts = np.random.default_rng(seed=seed)
 
         # Check if the table length matches the expected number of iterations
         prev_iters = len(output_table)
@@ -1486,7 +1503,7 @@ class MultiRegionFit:
                         upper=np.full(stacked_Ax.shape[-1], np.inf),
                         max_iters=_nnls_i,
                         tol=_nnls_t,
-                        # n_threads=20 # Inter-thread communication is actually slower
+                        n_threads=1,  # Inter-thread communication is actually slower
                     )
                     state.solve()
                     state_iters = deepcopy(state.iters)
@@ -1494,7 +1511,8 @@ class MultiRegionFit:
                     coeffs[:num_stacks] -= off
                     del state
 
-                print(f"NNLS fitting... DONE {time()-t1:.3f}s")
+                t2 = time()
+                print(f"NNLS fitting... DONE {t2-t1:.3f}s")
 
                 out_coeffs[ok_temp] = coeffs
                 stacked_modelf = np.dot(out_coeffs, stacked_A)
@@ -1515,6 +1533,9 @@ class MultiRegionFit:
                         rows,
                         id_shifts,
                         n_shifted_samples,
+                        t2 - t1,
+                        time() - t0,
+                        ok_temp.sum(),
                         *out_coeffs[:temp_offset],
                         *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
                     ]
@@ -1580,6 +1601,10 @@ class MultiRegionFit:
             covar = np.zeros((N, N))
 
         covar_diagonal = grizli_utils.fill_masked_covar(covar, ok_temp).diagonal()
+
+        chi2nu = output_table["chi2"][best_iter] / (
+            DoF - output_table["unique_temp"][best_iter]
+        )
 
         # Ensure that the array is cleaned before repopulating
         stacked_A[temp_offset:].fill(0.0)
@@ -1681,7 +1706,16 @@ class MultiRegionFit:
                         "Configuration file",
                     )
                     h.header["REDSHIFT"] = (z, "Redshift used")
-                    h.header["CHI2"] = output_table["chi2"][best_iter]
+                    h.header["CHI2"] = (
+                        output_table["chi2"][best_iter],
+                        "Chi^2 statistic",
+                    )
+                    h.header["DOF"] = (DoF, "Degrees of freedom (active pixels)")
+                    h.header["NTEMP"] = (
+                        output_table["unique_temp"][best_iter],
+                        "Number of unique templates",
+                    )
+                    h.header["CHI2NU"] = (chi2nu, "Reduced chi^2 statistic")
                     h.header = self.add_pipes_info(h.header)
                 stacked_hdul.extend(hdus)
 
@@ -1744,6 +1778,8 @@ class MultiRegionFit:
                 return_line_flux=True,
             )
 
+            lock = Lock()
+
             for l_i, l_v in enumerate(use_lines):
 
                 if not check_coverage(l_v["wave"] * (1 + z)):
@@ -1756,15 +1792,16 @@ class MultiRegionFit:
 
                     flat_beam_models.fill(0.0)
 
-                    results = [None] * self.n_regions
+                    # results = [None] * self.n_regions
 
                     with multiprocessing.Pool(
                         processes=cpu_count,
                         initializer=_init_pipes_sampler,
-                        initargs=(fit_instructions, veldisp, self.MB.beams),
+                        initargs=(fit_instructions, veldisp, self.MB.beams, lock),
                     ) as pool:
                         for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                            results[s_i] = pool.apply_async(
+                            # results[s_i] = pool.apply_async(
+                            pool.apply_async(
                                 beams_fn,
                                 args=(s_i, s),
                                 kwds={
@@ -1805,7 +1842,16 @@ class MultiRegionFit:
                     )
 
                     hdu[0].header["REDSHIFT"] = (z, "Redshift used")
-                    hdu[0].header["CHI2"] = output_table["chi2"][best_iter]
+                    hdu[0].header["CHI2"] = (
+                        output_table["chi2"][best_iter],
+                        "Chi^2 statistic",
+                    )
+                    hdu[0].header["DOF"] = (DoF, "Degrees of freedom (active pixels)")
+                    hdu[0].header["NTEMP"] = (
+                        output_table["unique_temp"][best_iter],
+                        "Number of unique templates",
+                    )
+                    hdu[0].header["CHI2NU"] = (chi2nu, "Reduced chi^2 statistic")
                     hdu[0].header = self.add_pipes_info(hdu[0].header)
                     for e in [-4, -3, -2, -1]:
                         hdu[e].header["EXTVER"] = l_v["grizli"]
@@ -1884,15 +1930,17 @@ class MultiRegionFit:
                     )
                     s = np.clip(s, 0.25, 4)
 
-                    # s /= (pline["pixscale"] / 0.1) ** 2
                     s /= (pline.get("pixscale", 0.06) / 0.1) ** 2
 
                     scale_linemap = 1
+                    if scale_linemap < 0:
+                        s = -1
+
                     dscale = 1.0 / 4
 
                     fig = show_drizzled_lines(
                         line_hdu,
-                        size_arcsec=1.5,
+                        size_arcsec=1.6,
                         cmap="plasma_r",
                         scale=s * scale_linemap,
                         dscale=s * dscale * scale_linemap,
