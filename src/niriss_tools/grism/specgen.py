@@ -17,7 +17,6 @@ from bagpipes.models.agn_model import agn
 from bagpipes.models.dust_attenuation_model import dust_attenuation
 from bagpipes.models.dust_emission_model import dust_emission
 from bagpipes.models.igm_model import igm
-from bagpipes.models.model_galaxy import H, addAbs
 
 # from bagpipes.models.agn_model import agn
 from bagpipes.models.nebular_model import nebular
@@ -44,21 +43,21 @@ CLOUDY_LINE_MAP = [
     },
     {
         "cloudy": [
-            "H  1  1.28180m",
+            "H  1  1.28181m",
         ],
         "grizli": "PaB",
         "wave": 12821.7,
     },
     {
         "cloudy": [
-            "H  1  1.09380m",
+            "H  1  1.09381m",
         ],
         "grizli": "PaG",
         "wave": 10941.2,
     },
     {
         "cloudy": [
-            "H  1  1.00493m",
+            "H  1  1.00494m",
         ],
         "grizli": "PaD",
         "wave": 10052.2,
@@ -66,7 +65,7 @@ CLOUDY_LINE_MAP = [
     # Balmer Series
     {
         "cloudy": [
-            "H  1  6562.81A",
+            "H  1  6562.80A",
             "N  2  6583.45A",
             "N  2  6548.05A",
         ],
@@ -74,7 +73,7 @@ CLOUDY_LINE_MAP = [
         "wave": 6564.697,
     },
     {
-        "cloudy": ["H  1  4861.33A"],
+        "cloudy": ["H  1  4861.32A"],
         "grizli": "Hb",
         "wave": 4862.738,
     },
@@ -104,14 +103,14 @@ CLOUDY_LINE_MAP = [
         "wave": 4960.295,
     },
     {
-        "cloudy": ["Blnd  4363.00A"],
+        "cloudy": ["O  3  4363.21A"],
         "grizli": "OIII-4363",
         "wave": 4364.436,
     },
     {
         "cloudy": [
-            "Blnd  3726.00A",
-            "Blnd  3729.00A",
+            "Blnd  3726.03A",
+            "Blnd  3728.81A",
         ],
         "grizli": "OII",
         "wave": 3728.48,
@@ -149,14 +148,14 @@ CLOUDY_LINE_MAP = [
     # Helium
     {
         "cloudy": [
-            "TOTL  1.08303m",
+            "Blnd  1.08302m",
         ],
         "grizli": "HeI-1083",
         "wave": 10830.3,
     },
     {
         "cloudy": [
-            "He 1  5875.64A",
+            "Blnd  5875.66A",
         ],
         "grizli": "HeI-5877",
         "wave": 5877.249,
@@ -165,7 +164,7 @@ CLOUDY_LINE_MAP = [
         "cloudy": [
             "He 1  3888.63A",
         ],
-        "grizli": "HeI-1083",
+        "grizli": "HeI-3889",
         "wave": 3889.75,
     },
 ]
@@ -309,7 +308,7 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         "ergscma" for ergs per second per centimetre squared per
         angstrom, can also be set to "mujy" for microjanskys.
     phot_units : str, optional
-        The units the output spectrum will be returned in. Default is
+        The units the output photometry will be returned in. Default is
         "ergscma" for ergs per second per centimetre squared per
         angstrom, can also be set to "mujy" for microjanskys.
     index_list : list, optional
@@ -370,6 +369,7 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         self.igm = igm(self.wavelengths)
         self.nebular = False
         self.dust_atten = False
+        self.agn_dust_atten = False
         self.dust_emission = False
         self.agn = False
 
@@ -388,6 +388,11 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
             self.dust_emission = dust_emission(self.wavelengths)
             self.dust_atten = dust_attenuation(
                 self.wavelengths, model_components["dust"]
+            )
+
+        if "agn_dust" in list(model_components):
+            self.agn_dust_atten = dust_attenuation(
+                self.wavelengths, model_components["agn_dust"]
             )
 
         if "agn" in list(model_components):
@@ -433,6 +438,8 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         self.sfh.update(model_components, fast_spec_only)
         if self.dust_atten:
             self.dust_atten.update(model_components["dust"])
+        if self.agn_dust_atten:
+            self.agn_dust_atten.update(model_components["agn_dust"])
 
         # If the SFH is unphysical do not caclulate the full spectrum
         if self.sfh.unphysical:
@@ -461,6 +468,14 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
             self.agn.update(self.model_comp["agn"])
             agn_spec = self.agn.spectrum
             agn_spec *= self.igm.trans(self.model_comp["redshift"])
+
+            if self.agn_dust_atten:
+                agn_trans = 10 ** (
+                    -self.model_comp["agn_dust"]["Av"]
+                    * self.agn_dust_atten.A_cont
+                    / 2.5
+                )
+                agn_spec *= agn_trans
 
             self.spectrum_full += agn_spec / (1.0 + self.model_comp["redshift"])
 
@@ -554,11 +569,15 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
                 grid, t_bc, model_comp["nebular"]["logU"]
             )
 
-            # All stellar emission below 912A goes into nebular emission
-            spectrum_bc[self.wavelengths < 912.0] = 0.0
-            spectrum_bc += self.nebular.spectrum(
-                grid, t_bc, model_comp["nebular"]["logU"]
-            )
+            # Stellar light below 912A is converted to nebular emission
+            if "fesc" in list(model_comp["nebular"]):
+                f_esc = model_comp["nebular"]["fesc"]
+            else:
+                f_esc = 0.0
+
+            spectrum_bc[self.wavelengths < 912.0] *= f_esc
+            logU = model_comp["nebular"]["logU"]
+            spectrum_bc += (1 - f_esc) * self.nebular.spectrum(grid, t_bc, logU)
 
             if rm_line is not None:
                 rm_line = np.atleast_1d(rm_line).ravel()
@@ -585,6 +604,12 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
                 eta = model_comp["dust"]["eta"]
                 bc_Av_reduced = (eta - 1.0) * model_comp["dust"]["Av"]
                 bc_trans_red = 10 ** (-bc_Av_reduced * self.dust_atten.A_cont / 2.5)
+                if self.dust_atten.type == "VW07":
+                    bc_trans_red = 10 ** (
+                        -bc_Av_reduced * self.dust_atten.A_cont_bc / 2.5
+                    )
+                else:
+                    bc_trans_red = 10 ** (-bc_Av_reduced * self.dust_atten.A_cont / 2.5)
                 spectrum_bc_dust = spectrum_bc * bc_trans_red
                 dust_flux += np.trapz(
                     spectrum_bc - spectrum_bc_dust, x=self.wavelengths
@@ -593,8 +618,16 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
                 spectrum_bc = spectrum_bc_dust
 
             # Attenuate emission line fluxes.
-            bc_Av = eta * model_comp["dust"]["Av"]
-            em_lines *= 10 ** (-bc_Av * self.dust_atten.A_line / 2.5)
+            if self.dust_atten.type == "VW07":
+                Av = model_comp["dust"]["Av"]
+                # Apply birth cloud attenuation first
+                em_lines *= 10 ** (-bc_Av_reduced * self.dust_atten.A_line_bc / 2.5)
+                # Then apply general ISM attenuation
+                em_lines *= 10 ** (-Av * self.dust_atten.A_line_ism / 2.5)
+
+            else:
+                bc_Av = eta * model_comp["dust"]["Av"]
+                em_lines *= 10 ** (-bc_Av * self.dust_atten.A_line / 2.5)
 
         spectrum += spectrum_bc  # Add birth cloud spectrum to spectrum.
 
@@ -623,11 +656,27 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         spectrum *= self.igm.trans(model_comp["redshift"])
 
         if "dla" in list(model_comp):
-            spectrum *= addAbs(
-                self.wavelengths * self.model_comp["redshift"],
-                self.model_comp["dla"]["t"],
-                self.model_comp["dla"]["zabs"],
+            if "redshift" in list(model_comp["dla"]):
+                wavelengths_DLA_rest = (
+                    self.wavelengths
+                    * (1.0 + model_comp["redshift"])
+                    / (1.0 + model_comp["dla"]["redshift"])
+                )
+            else:
+                wavelengths_DLA_rest = self.wavelengths
+            self.dla_trans = dla_trans(
+                wavelengths_DLA_rest,
+                N_HI=10 ** model_comp["dla"]["logN_HI"],
+                T=model_comp["dla"]["T"],
+                b_turb=(
+                    model_comp["dla"]["b_turb"]
+                    if "b_turb" in list(model_comp["dla"])
+                    else 0.0
+                ),
             )
+            spectrum *= self.dla_trans
+            if self.dust_atten:
+                self.spectrum_bc *= self.dla_trans
 
         if self.dust_atten:
             self.spectrum_bc *= self.igm.trans(model_comp["redshift"])
@@ -665,14 +714,6 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         em_lines *= 3.826 * 10**33
 
         self.line_fluxes = dict(zip(config.line_names, em_lines))
-        self.line_waves_redshifted = dict(
-            zip(
-                config.line_names,
-                config.line_wavs
-                * (1 + (model_comp["nebular"].get("velshift", 0) / (3 * 10**5)))
-                * (1.0 + model_comp["redshift"]),
-            )
-        )
 
         self.spectrum_full = spectrum
 
@@ -976,20 +1017,10 @@ class BagpipesSampler(object):
 
         if return_line_flux:
             line_flux = 0.0
-
             if rm_line is not None:
                 rm_line = np.atleast_1d(rm_line).ravel()
-                # line_flux = zip([])
-                # line_flux = np.asarray([[self.model_gal.line_waves_redshifted[r], self.model_gal.line_fluxes[r]] for r in rm_line])
                 for rm in rm_line:
                     line_flux += self.model_gal.line_fluxes[rm]
-                    # print (self.model_gal.line_waves_redshifted[rm])
-                # print ("LINEFLUX", line_flux)
-            # else:
-            # line_flux = np.asarray([[]])
-            # for rm in rm_line:
-            # line_flux += self.model_gal.line_fluxes[rm]
-            # print (self.model_gal.line_waves_redshifted[rm])
             return self.model_gal.spectrum.T, line_flux
         else:
             return self.model_gal.spectrum.T
