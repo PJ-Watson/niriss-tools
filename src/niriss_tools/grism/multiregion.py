@@ -779,9 +779,7 @@ class MultiRegionFit:
                 )
                 if return_line_flux:
                     temp_resamp_1d, line_flux = out
-                    line_fluxes[sample_i] = (
-                        line_flux * coeffs[f"bin_{seg_id}"][sample_i]
-                    )
+                    line_fluxes[sample_i] = line_flux
                 else:
                     temp_resamp_1d = out
 
@@ -1600,7 +1598,10 @@ class MultiRegionFit:
             N = ok_temp.sum()
             covar = np.zeros((N, N))
 
-        covar_diagonal = grizli_utils.fill_masked_covar(covar, ok_temp).diagonal()
+        covard = np.sqrt(covar.diagonal())
+
+        coeffs_errs = out_coeffs * 0.0
+        coeffs_errs[ok_temp] = covard
 
         chi2nu = output_table["chi2"][best_iter] / (
             DoF - output_table["unique_temp"][best_iter]
@@ -1792,7 +1793,7 @@ class MultiRegionFit:
 
                     flat_beam_models.fill(0.0)
 
-                    # results = [None] * self.n_regions
+                    results = [None] * self.n_regions
 
                     with multiprocessing.Pool(
                         processes=cpu_count,
@@ -1800,8 +1801,7 @@ class MultiRegionFit:
                         initargs=(fit_instructions, veldisp, self.MB.beams, lock),
                     ) as pool:
                         for s_i, s in enumerate(self.regions_phot_cat["bin_id"]):
-                            # results[s_i] = pool.apply_async(
-                            pool.apply_async(
+                            results[s_i] = pool.apply_async(
                                 beams_fn,
                                 args=(s_i, s),
                                 kwds={
@@ -1812,6 +1812,8 @@ class MultiRegionFit:
                                 },
                                 error_callback=print,
                             )
+
+                        results = np.asarray([r.get() for r in results]).ravel()
 
                         pool.close()
                         pool.join()
@@ -1865,11 +1867,16 @@ class MultiRegionFit:
                         add_hdu = hdu
 
                         beams_copy = [b.beam.model.copy() for b in self.MB.beams]
+                        line_sn = np.nansum(
+                            results * out_coeffs[temp_offset:]
+                        ) / np.sqrt(
+                            np.nansum((results * coeffs_errs[temp_offset:]) ** 2)
+                        )
                     else:
                         hdu[-3].header["EXTNAME"] = "MODEL"
                         add_hdu.append(hdu[-3])
                         line_flux_i = np.nansum(hdu[-3].data) * 1e-17
-                        line_err_i = 0.0
+                        line_err_i = line_flux_i / line_sn
 
                 saved_lines.append(l_v["grizli"])
 

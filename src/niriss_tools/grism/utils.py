@@ -92,25 +92,49 @@ def gen_stacked_beams(
             # This minimises the chance of trace pixel errors due to integer rounding
             # in the grizli and grismconf code
             direct_cen = (
-                np.asarray(mb.beams[beam_idxs[0]].direct.data["REF"].shape) + 1
+                np.asarray(mb.beams[beam_idxs[0]].direct.data["REF"].shape[::-1])  # + 1
             ) / 2
 
-            shift_dx = np.zeros(len(beam_idxs))
+            # print (mb.beams[0].sh)#, mb.beams[0].sh_beam)
+            # print (dir(mb.beams[0]))
+            # print (mb.beams[0].grism.data["SCI"].shape)
+            # import matplotlib.pyplot as plt
+            # plt.imshow(mb.beams[0].grism.data["SCI"])
+            # plt.show()
+
+            print(mb.ra, mb.dec)
+
+            shift_dx = np.zeros((len(beam_idxs), 2))
             for i, b_i in enumerate(beam_idxs):
-                shift_dx[i] = (
-                    direct_cen
-                    - np.array(
-                        mb.beams[b_i]
-                        .direct.wcs.all_world2pix(
-                            [[mb.ra, mb.dec]],
-                            1,
-                        )
-                        .flatten()
+                # print (b_i, mb.beams[b_i]
+                #         .direct.wcs.all_world2pix(
+                #             [[mb.ra, mb.dec]],
+                #             1,
+                #             ra_dec_order=True,
+                #         )
+                #         .flatten())
+                shift_dx[i] = direct_cen - np.array(
+                    mb.beams[b_i]
+                    .direct.wcs.all_world2pix(
+                        [[mb.ra, mb.dec]],
+                        1,
+                        ra_dec_order=True,
                     )
-                )[0]
+                    .flatten()
+                )
+
+            print(shift_dx)
+            print(
+                "SELECTED:",
+                shift_dx[np.argmin(np.abs(shift_dx[:, 0] - np.round(shift_dx[:, 0])))],
+            )
 
             new_beam = deepcopy(
-                mb.beams[beam_idxs[np.argmin(np.abs(shift_dx - np.round(shift_dx)))]]
+                mb.beams[
+                    beam_idxs[
+                        np.argmin(np.abs(shift_dx[:, 0] - np.round(shift_dx[:, 0])))
+                    ]
+                ]
             )
 
             # Set centre of direct image to the actual coordinates
@@ -118,7 +142,29 @@ def gen_stacked_beams(
                 new_beam.direct.wcs.all_world2pix(
                     [[mb.ra, mb.dec]],
                     1,
+                    ra_dec_order=True,
                 ).flatten()
+            )
+            # shift_crpix *= -1
+            # shift_crpix = shift_crpix[::-1]
+
+            print("SHIFT", shift_crpix)
+            print(
+                np.array(
+                    new_beam.direct.wcs.all_world2pix(
+                        [[mb.ra, mb.dec]],
+                        1,
+                        ra_dec_order=True,
+                    ).flatten()
+                )
+            )
+
+            # print (shift_crpix, new_beam.beam.xoffset, new_beam.beam.yoffset, shift_crpix[0] - new_beam.beam.xoffset,
+            #         shift_crpix[1] - new_beam.beam.yoffset,)
+            # print ("blank")
+
+            print(
+                new_beam.grism.wcs._naxis, new_beam.beam.xoffset, new_beam.beam.yoffset
             )
 
             new_beam.grism.wcs = grizli_utils.transform_wcs(
@@ -128,9 +174,30 @@ def gen_stacked_beams(
                     shift_crpix[1] - new_beam.beam.yoffset,
                 ],
             )
+            print(new_beam.direct.wcs)
+            print(
+                np.array(
+                    new_beam.direct.wcs.all_world2pix(
+                        [[mb.ra, mb.dec]],
+                        1,
+                        ra_dec_order=True,
+                    ).flatten()
+                )
+            )
             new_beam.direct.wcs = grizli_utils.transform_wcs(
                 new_beam.direct.wcs, translation=shift_crpix
             )
+            print(new_beam.direct.wcs)
+            print(
+                np.array(
+                    new_beam.direct.wcs.all_world2pix(
+                        [[mb.ra, mb.dec]],
+                        1,
+                        ra_dec_order=True,
+                    ).flatten()
+                )
+            )
+            # exit()
 
             sh = new_beam.sh
             outsci = np.zeros(sh, dtype=np.float32)
@@ -150,7 +217,7 @@ def gen_stacked_beams(
             outcd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.int32)
 
             grism_data = [mb.beams[i].grism.data["SCI"] for i in beam_idxs]
-            direct_data = [mb.beams[i].beam.direct for i in beam_idxs]
+            # direct_data = [mb.beams[i].beam.direct for i in beam_idxs]
             direct_data = [mb.beams[i].direct.data["REF"] for i in beam_idxs]
 
             dir_scale = np.nanmedian(new_beam.direct.data["REF"] / new_beam.beam.direct)
@@ -167,7 +234,7 @@ def gen_stacked_beams(
             for i, idx in enumerate(beam_idxs):
 
                 beam = mb.beams[idx]
-                direct_wcs_i = beam.direct.wcs
+                direct_wcs_i = beam.direct.wcs.copy()
                 # grism_wcs_i = beam.grism.wcs.copy()
                 grism_wcs_i = grizli_utils.transform_wcs(
                     beam.grism.wcs.copy(),
@@ -198,6 +265,7 @@ def gen_stacked_beams(
                     pixfrac=pixfrac,
                     kernel=kernel,
                     fillval=dfillval,
+                    wcsmap=grizli_utils.WCSMapAll,
                 )
                 drizzler(
                     grism_data[i],
@@ -217,6 +285,7 @@ def gen_stacked_beams(
                     pixfrac=pixfrac,
                     kernel=kernel,
                     fillval=dfillval,
+                    wcsmap=grizli_utils.WCSMapAll,
                 )
                 drizzler(
                     beam.contam,
@@ -236,6 +305,7 @@ def gen_stacked_beams(
                     pixfrac=pixfrac,
                     kernel=kernel,
                     fillval=dfillval,
+                    wcsmap=grizli_utils.WCSMapAll,
                 )
 
                 drizzler(
@@ -254,6 +324,7 @@ def gen_stacked_beams(
                     pixfrac=pixfrac,
                     kernel=kernel,
                     fillval=dfillval,
+                    wcsmap=grizli_utils.WCSMapAll,
                 )
 
             # Correct for drizzle scaling
@@ -281,6 +352,8 @@ def gen_stacked_beams(
             new_beam.direct.data["REF"] = outdir
             new_beam.direct.header.update(grizli_utils.to_header(new_beam.direct.wcs))
             new_beam.grism.header.update(grizli_utils.to_header(new_beam.grism.wcs))
+
+            print(new_beam.beam.xcenter, new_beam.beam.ycenter)
 
             new_beam.beam = GrismDisperser(
                 id=mb.id,
@@ -333,6 +406,33 @@ def gen_stacked_beams(
         min_sens=mb.min_sens,
         mask_resid=mb.mask_resid,
     )
+
+    # beams_hdul = new_multibeam.write_master_fits(get_hdu=True)
+    # # beams_hdul = mb.write_master_fits(get_hdu=True)
+
+    # import matplotlib.pyplot as plt
+
+    # hdu = beams_hdul["REF"]
+
+    # wcs = WCS(hdu)
+    # hdr = hdu.header
+    # data = hdu.data
+
+    # main_hdr = beams_hdul[0].header
+
+    # fig, ax = plt.subplots(subplot_kw=dict(projection=wcs))
+
+    # ax.imshow(data, cmap="plasma")
+    # ax.scatter(main_hdr["RA"], main_hdr["DEC"], c="r", transform=ax.get_transform("world"), label="hdr")
+    # ax.scatter(3.591922168628596,  -30.41574089911106, c="green", transform=ax.get_transform("world"), label="cat")
+    # #  3.591922168628596
+    # ax.legend()
+
+    # ax.coords[0].set_major_formatter('d.ddddd')#, show_decimal_unit=False)
+    # ax.coords[1].set_major_formatter('d.ddddd')
+
+    # plt.show()
+    # exit()
 
     return new_multibeam
 

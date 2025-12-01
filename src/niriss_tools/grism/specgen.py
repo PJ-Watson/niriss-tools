@@ -665,6 +665,14 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         em_lines *= 3.826 * 10**33
 
         self.line_fluxes = dict(zip(config.line_names, em_lines))
+        self.line_waves_redshifted = dict(
+            zip(
+                config.line_names,
+                config.line_wavs
+                * (1 + (model_comp["nebular"].get("velshift", 0) / (3 * 10**5)))
+                * (1.0 + model_comp["redshift"]),
+            )
+        )
 
         self.spectrum_full = spectrum
 
@@ -968,10 +976,20 @@ class BagpipesSampler(object):
 
         if return_line_flux:
             line_flux = 0.0
+
             if rm_line is not None:
                 rm_line = np.atleast_1d(rm_line).ravel()
+                # line_flux = zip([])
+                # line_flux = np.asarray([[self.model_gal.line_waves_redshifted[r], self.model_gal.line_fluxes[r]] for r in rm_line])
                 for rm in rm_line:
                     line_flux += self.model_gal.line_fluxes[rm]
+                    # print (self.model_gal.line_waves_redshifted[rm])
+                # print ("LINEFLUX", line_flux)
+            # else:
+            # line_flux = np.asarray([[]])
+            # for rm in rm_line:
+            # line_flux += self.model_gal.line_fluxes[rm]
+            # print (self.model_gal.line_waves_redshifted[rm])
             return self.model_gal.spectrum.T, line_flux
         else:
             return self.model_gal.spectrum.T
