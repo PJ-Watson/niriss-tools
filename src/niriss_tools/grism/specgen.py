@@ -109,8 +109,8 @@ CLOUDY_LINE_MAP = [
     },
     {
         "cloudy": [
-            "Blnd  3726.03A",
-            "Blnd  3728.81A",
+            "O  2  3726.03A",
+            "O  2  3728.81A",
         ],
         "grizli": "OII",
         "wave": 3728.48,
@@ -162,7 +162,7 @@ CLOUDY_LINE_MAP = [
     },
     {
         "cloudy": [
-            "He 1  3888.63A",
+            "He 1  3888.64A",
         ],
         "grizli": "HeI-3889",
         "wave": 3889.75,
