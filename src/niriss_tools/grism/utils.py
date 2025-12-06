@@ -456,6 +456,7 @@ def align_direct_images(
                         interp="sinc",
                         sinscl=1.0,
                         stepsize=1,
+                        wcsmap=grizli_utils.WCSMapAll,
                     )
 
                     orig_header.update(beam_wcs.to_header())
@@ -544,6 +545,7 @@ def gen_psf(multibeam: MultiBeam) -> dict:
                 coeffs=True,
                 sinscl=1.0,
                 stepsize=1,
+                wcsmap=grizli_utils.WCSMapAll,
             )
             psf_aligned_images[beam_name] = blotted
 
