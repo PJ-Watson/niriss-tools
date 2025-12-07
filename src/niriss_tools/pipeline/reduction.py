@@ -15,6 +15,7 @@ __all__ = [
     "gen_associations",
     "process_using_aws",
     "recursive_merge",
+    "load_assoc"
 ]
 
 
@@ -202,6 +203,7 @@ def load_assoc(
     dec=-30.39997,
     radius=1,
     proposal_id=1324,
+    instrument_name = "NIRISS"
 ):
     """
     Load exposure tables and association names from the DJA.
@@ -243,7 +245,7 @@ def load_assoc(
         QUERY_URL.format(ra=ra, dec=dec, radius=radius), format="csv"
     )
 
-    nis = (assoc_query["instrument_name"] == "NIRISS") & (
+    nis = (assoc_query["instrument_name"] == instrument_name) & (
         assoc_query["proposal_id"] == proposal_id
     )
 
@@ -270,6 +272,7 @@ def process_using_aws(
     drizzle_kernel: str = "square",
     drizzle_pixfrac: float = 0.8,
     cutout_mosaic_kwargs: dict = {},
+    proposal_id = 1324,
 ):
     """
     Process WFSS data using the functions in `grizli.aws`.
@@ -361,6 +364,11 @@ def process_using_aws(
                 process_visit_kwargs["other_args"]["mosaic_drizzle_args"]["context"] = (
                     os.environ["CRDS_CONTEXT"]
                 )
+
+            if "instrume" in tab.colnames:
+                tab["instrument_name"] = tab["instrume"]
+                tab["proposal_id"] = proposal_id
+                tab["dataURL"] = [f"dummy/{file}_rate.fits" for file in tab["file"]]
 
             _ = visit_processor.process_visit(
                 assoc_name,

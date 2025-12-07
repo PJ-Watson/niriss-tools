@@ -13,16 +13,17 @@ except:
 from astropy.table import Table
 
 # Latest context
-os.environ["CRDS_CONTEXT"] = "jwst_1413.pmap"
+os.environ["CRDS_CONTEXT"] = "jwst_1467.pmap"
 # Set to "NGDEEP" to use those calibrations
-os.environ["NIRISS_CALIB"] = "GRIZLI"
+os.environ["NIRISS_CALIB"] = "CONF/CUSTOM/COMBINE_NGDEEP_A_GRIZLI_{1}_{0}_V1.conf"
 
 from niriss_tools import pipeline
 
-root_dir = os.getenv("ROOT_DIR")
+# root_dir = os.getenv("ROOT_DIR")
+root_dir = Path("/media/watsonp/ArchivePJW/backup/data")
 field_name = "glass-a2744"
 proposal_ID = 1324
-reduction_dir = Path(root_dir) / f"2025_08_05_{field_name}"
+reduction_dir = Path(root_dir) / f"2025_12_06_{field_name}"
 reduction_dir.mkdir(exist_ok=True, parents=True)
 
 
@@ -78,7 +79,7 @@ if __name__ == "__main__":
 
     if not (grizli_home_dir / "Prep" / f"{field_name}-ir_drc_sci.fits").is_file():
 
-        assoc_dict = load_assoc()
+        assoc_dict = pipeline.load_assoc()
 
         pipeline.process_using_aws(
             grizli_home_dir, level_1_dir, assoc_dict, field_name=field_name
@@ -99,29 +100,29 @@ if __name__ == "__main__":
             from niriss_tools.pipeline import regen_catalogue
 
             # Or whatever name you came up with during the previous reduction
-            old_seg_name = (
+            aligned_seg_name = (
                 reduction_dir / f"{field_name}-ir_seg_mod_3_ordered2_2074.fits"
             )
 
-            aligned_seg_name = grizli_home_dir / "Prep" / f"aligned_{old_seg_name.name}"
+            # aligned_seg_name = grizli_home_dir / "Prep" / f"aligned_{old_seg_name.name}"
 
-            reproject_image(
-                old_seg_name,
-                aligned_seg_name,
-                WCS(fits.getheader(f"{field_name}-ir_drc_sci.fits")),
-                fits.getdata(f"{field_name}-ir_drc_sci.fits").shape,
-                method="interp",
-                order="nearest-neighbor",
-            )
+            # reproject_image(
+            #     old_seg_name,
+            #     aligned_seg_name,
+            #     WCS(fits.getheader(f"{field_name}-ir_drc_sci.fits")),
+            #     fits.getdata(f"{field_name}-ir_drc_sci.fits").shape,
+            #     method="interp",
+            #     order="nearest-neighbor",
+            # )
 
             segment_map = fits.getdata(aligned_seg_name)
 
             use_regen_seg = np.asarray(segment_map).astype(np.int32)
-            print(
-                np.min(use_regen_seg),
-                np.max(use_regen_seg),
-                len(np.unique(use_regen_seg)),
-            )
+            # print(
+            #     np.min(use_regen_seg),
+            #     np.max(use_regen_seg),
+            #     len(np.unique(use_regen_seg)),
+            # )
             new_cat = regen_catalogue(
                 use_regen_seg,
                 root=f"{field_name}-ir",
@@ -148,7 +149,7 @@ if __name__ == "__main__":
     kwargs = auto_script.get_yml_parameters()
 
     # The number of processes to use
-    cpu_count = 4
+    cpu_count = 1
 
     # We use one set of calibrations for the 1st order models, and combine
     # them with different models for the other orders.
@@ -165,20 +166,29 @@ if __name__ == "__main__":
     grism_files = [str(s) for s in Path.cwd().glob("*GrismFLT.fits")][:]
 
     if len(grism_files) == 0:
-        rate_files = []
-        for rate in Path.cwd().glob("*_rate.fits"):
-            if (fits.getheader(rate)["PUPIL"] == "F200W") and (
-                fits.getheader(rate)["FILTER"] == "GR150C"
-            ):
-                rate_files.append(str(rate))
-        rate_files = rate_files[:2]
+        # rate_files = []
+        # for rate in Path.cwd().glob("*_rate.fits"):
+        #     if (fits.getheader(rate)["PUPIL"] == "F150W") and (
+        #         fits.getheader(rate)["FILTER"] == "GR150C"
+        #     ):
+        #         rate_files.append(str(rate))
+        # rate_files = rate_files[:2]
+        # for rate in Path.cwd().glob("*_rate.fits"):
+        #     if len(rate_files)==4:
+        #         continue
+        #     if (fits.getheader(rate)["PUPIL"] == "F150W") and (
+        #         fits.getheader(rate)["FILTER"] == "GR150R"
+        #     ):
+        #         rate_files.append(str(rate))
+        # # rate_files = rate_files[:2]
 
         # if len(rate_files) > 0:
 
         grism_prep_args = kwargs["grism_prep_args"]
 
         # For now, turn off refining contamination model with polynomial fits
-        grism_prep_args["refine_niter"] = 0
+        grism_prep_args["refine_niter"] = 3
+        grism_prep_args["refine_poly_order"] = 7
 
         # Flat-flambda spectra
         grism_prep_args["init_coeffs"] = [1.0]
@@ -187,8 +197,8 @@ if __name__ == "__main__":
 
         # Here we use all of the detected objects.
         # These can be adjusted based on how deep the spectra/visits are
-        grism_prep_args["refine_mag_limits"] = [14.0, 25.0]
-        grism_prep_args["prelim_mag_limit"] = 25.0
+        grism_prep_args["refine_mag_limits"] = [14.0, 35.0]
+        grism_prep_args["prelim_mag_limit"] = 35.0
 
         # The grism reference filters for direct images
         grism_prep_args["gris_ref_filters"] = {
@@ -199,19 +209,19 @@ if __name__ == "__main__":
         grism_prep_args["use_jwst_crds"] = False
         grism_prep_args["files"] = rate_files[:]
 
-        # args_MB_conf = grism_prep_args.copy()
+        args_MB_conf = grism_prep_args.copy()
 
-        # # Calculate the non-1st order contamination using the 221215.conf files (Matharu & Brammer)
-        # args_MB_conf["model_kwargs"] = {
-        #     "compute_size": True,
-        #     "get_beams": ["B", "C", "D", "E"],
-        #     # "get_beams": ["B"],
-        #     "force_orders": True,
-        # }
+        # Calculate the non-1st order contamination using the 221215.conf files (Matharu & Brammer)
+        args_MB_conf["model_kwargs"] = {
+            "compute_size": True,
+            # "get_beams": ["B", "C", "D", "E"],
+            # "get_beams": ["B"],
+            # "force_orders": True,
+        }
 
-        # grp = auto_script.grism_prep(
-        #     field_root=field_name, pad=800, cpu_count=cpu_count, **args_MB_conf
-        # )
+        grp = auto_script.grism_prep(
+            field_root=field_name, pad=800, cpu_count=cpu_count, **args_MB_conf
+        )
 
         # os.chdir(grizli_home_dir / "Prep")
 
@@ -222,18 +232,18 @@ if __name__ == "__main__":
         #     s.rename(MB_conf_dir / s.name)
         #     s.with_suffix(".pkl").unlink()
 
-        # Calculate the 1st order models with the most up-to-date STScI calibrations
-        args_CRDS_conf = grism_prep_args.copy()
-        args_CRDS_conf["use_jwst_crds"] = True
-        args_CRDS_conf["model_kwargs"] = {
-            "compute_size": True,
-            # "get_beams" : ["A", "C", "E"],
-            "get_beams": ["A"],
-            "force_orders": True,
-        }
-        grp = auto_script.grism_prep(
-            field_root=field_name, pad=800, cpu_count=cpu_count, **args_CRDS_conf
-        )
+        # # Calculate the 1st order models with the most up-to-date STScI calibrations
+        # args_CRDS_conf = grism_prep_args.copy()
+        # args_CRDS_conf["use_jwst_crds"] = True
+        # args_CRDS_conf["model_kwargs"] = {
+        #     "compute_size": True,
+        #     # "get_beams" : ["A", "C", "E"],
+        #     "get_beams": ["A"],
+        #     "force_orders": True,
+        # }
+        # grp = auto_script.grism_prep(
+        #     field_root=field_name, pad=800, cpu_count=cpu_count, **args_CRDS_conf
+        # )
 
         # # Add the two models together
         # os.chdir(grizli_home_dir / "Prep")
@@ -259,7 +269,7 @@ if __name__ == "__main__":
         #     field_root=field_name, pad=800, cpu_count=cpu_count, **args_NP_conf
         # )
 
-    exit()
+    # exit()
 
     # The usual extraction code follows
 
@@ -305,12 +315,14 @@ if __name__ == "__main__":
         # 1407: 3.15,
         # 2549: 2.93,
         # 2982: 3.39,
-        # 2663: 2.65,
-        # 2074: 1.36
+        2663: 2.65,
+        2074: 1.36,
         # 646: 0.65,
         # 1196: 0.72,
         # 1444: 0.94
-        3070: 1.34
+        3070: 1.34,
+        14: 2.32,
+        174: 1.103,
     }
 
     for obj_id, obj_z in galaxies.items():

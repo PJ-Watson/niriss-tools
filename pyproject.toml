@@ -29,7 +29,7 @@ dependencies = [
     "vorbin",
     "reproject>=0.14",
     # One day I hope this dependency hell with drizzlepac can be resolved
-    "photutils@git+https://github.com/astropy/photutils@1.12.0",
+    # "photutils@git+https://github.com/astropy/photutils@1.12.0",
     "shapely>=2.0.4",
     "bagpipes-extended@git+https://github.com/PJ-Watson/bagpipes-extended",
     "grizli[jwst,aws]@git+https://github.com/PJ-Watson/grizli@new_workflow"
