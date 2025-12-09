@@ -32,7 +32,8 @@ dependencies = [
     # "photutils@git+https://github.com/astropy/photutils@1.12.0",
     "shapely>=2.0.4",
     "bagpipes-extended@git+https://github.com/PJ-Watson/bagpipes-extended",
-    "grizli[jwst,aws]@git+https://github.com/PJ-Watson/grizli@new_workflow"
+    "grizli[jwst,aws]@git+https://github.com/PJ-Watson/grizli@new_workflow",
+    "bottleneck"
 ]
 
 [project.optional-dependencies]

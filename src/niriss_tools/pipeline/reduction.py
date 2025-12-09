@@ -3,6 +3,7 @@ Functions used to reduce the raw data.
 """
 
 import os
+from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
 
@@ -15,7 +16,8 @@ __all__ = [
     "gen_associations",
     "process_using_aws",
     "recursive_merge",
-    "load_assoc"
+    "load_assoc",
+    "grism_background_subtraction",
 ]
 
 
@@ -199,11 +201,11 @@ def gen_associations(raw_output_dir: PathLike, field_name: str = "glass-a2744") 
 
 
 def load_assoc(
-    ra=3.58641,
-    dec=-30.39997,
-    radius=1,
-    proposal_id=1324,
-    instrument_name = "NIRISS"
+    ra: float = 3.58641,
+    dec: float = -30.39997,
+    radius: int = 1,
+    proposal_id: int = 1324,
+    instrument_name: str = "NIRISS",
 ):
     """
     Load exposure tables and association names from the DJA.
@@ -223,6 +225,8 @@ def load_assoc(
     proposal_id : int, optional
         The JWST proposal ID for the observations of interest, by default
         ``1324``.
+    instrument_name : str, optional
+        The name of the instrument, by default ``"NIRISS"``.
 
     Returns
     -------
@@ -272,7 +276,7 @@ def process_using_aws(
     drizzle_kernel: str = "square",
     drizzle_pixfrac: float = 0.8,
     cutout_mosaic_kwargs: dict = {},
-    proposal_id = 1324,
+    proposal_id: int = 1324,
 ):
     """
     Process WFSS data using the functions in `grizli.aws`.
@@ -309,6 +313,9 @@ def process_using_aws(
     cutout_mosaic_kwargs : dict, optional
         Any additional arguments to pass to
         `grizli.aws.visit_processor.cutout_mosaic`, by default ``{}``.
+    proposal_id : int, optional
+        The JWST proposal ID for the observations of interest, by default
+        ``1324``.
     """
 
     visit_dir = grizli_home_dir / "visits"
@@ -415,10 +422,14 @@ def process_using_aws(
             ~is_grism
         ],  # Pass the exposure information table for the direct images
         "ir_wcs": ref_wcs,
-        "half_optical": False,  # Otherwise will make JWST exposures at half pixel scale of ref_wcs
+        "half_optical": (
+            False
+        ),  # Otherwise will make JWST exposures at half pixel scale of ref_wcs
         "kernel": drizzle_kernel,
         "pixfrac": drizzle_pixfrac,
-        "clean_flt": False,  # Otherwise removes "rate.fits" files from the working directory!
+        "clean_flt": (
+            False
+        ),  # Otherwise removes "rate.fits" files from the working directory!
         "s3output": None,
         "make_exptime_map": False,
         "weight_type": "jwst",
@@ -503,3 +514,212 @@ def recursive_merge(d1: dict, d2: dict) -> dict:
     d3 = d1.copy()
     d3.update(d2)
     return d3
+
+
+def grism_background_subtraction(
+    prep_dir: PathLike = "../Prep",
+    field_root: str = "glass-a2744",
+    filters: list[str] = ["f115wn-clear", "f150wn-clear", "f200wn-clear"],
+    bkg_box_size: float = 3,
+    smooth_gauss_std: float = 1,
+    min_bkg_thresh: float = 0.0,
+    grism_prep_fn: Callable | None = None,
+):
+    """
+    Model and subtract a dispersed background from WFSS data.
+
+    Parameters
+    ----------
+    prep_dir : PathLike, optional
+        The default location for all data, by default ``"../Prep"``.
+    field_root : str, optional
+        The name of the field, by default ``"glass-a2744"``.
+    filters : list[str], optional
+        The names of the filters used, by default
+        ``["f115wn-clear", "f150wn-clear", "f200wn-clear"]``.
+    bkg_box_size : float, optional
+        The size of the boxes within which to calculate the background (in
+        arcseconds), by default ``3``.
+    smooth_gauss_std : float, optional
+        The standard deviation of the Gaussian used to smooth the
+        background (in arcseconds), by default ``1``.
+    min_bkg_thresh : float, optional
+        The minimum background value to be used. By default ``0``, which
+        means that only positive values of the background will be
+        dispersed and subtracted.
+    grism_prep_fn : Callable | None, optional
+        A wrapper function which takes the parameters ``rate_files`` and
+        ``grism_prep_kwargs``, and calculates the dispersed spectra.
+    """
+
+    from shutil import copy2
+
+    import astropy.units as u
+    from astropy.convolution import Gaussian2DKernel, convolve_fft
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from grizli.pipeline import auto_script
+    from photutils import background
+
+    prep_dir = Path(prep_dir)
+
+    img_backup_dir = prep_dir / "img_backup"
+    img_backup_dir.mkdir(exist_ok=True, parents=True)
+
+    all_bkgs = {}
+
+    sci_path = list(prep_dir.glob(f"{field_root}*ir_dr[zc]_sci.fits"))[0]
+    wht_path = list(prep_dir.glob(f"{field_root}*ir_dr[zc]_wht.fits"))[0]
+
+    if not (img_backup_dir / sci_path.name).is_file():
+        copy2(sci_path, img_backup_dir / sci_path.name)
+    if not (img_backup_dir / wht_path.name).is_file():
+        copy2(wht_path, img_backup_dir / wht_path.name)
+
+    for filt in filters:
+        sci_path = list(prep_dir.glob(f"{field_root}*{filt}_dr[zc]_sci.fits"))[0]
+        wht_path = list(prep_dir.glob(f"{field_root}*{filt}_dr[zc]_wht.fits"))[0]
+
+        if not (img_backup_dir / sci_path.name).is_file():
+            copy2(sci_path, img_backup_dir / sci_path.name)
+        if not (img_backup_dir / wht_path.name).is_file():
+            copy2(wht_path, img_backup_dir / wht_path.name)
+
+        # .astype(float) ensures byte order matches operating system
+        with fits.open(sci_path) as sci_hdul:
+            sci_img = sci_hdul[0].data.astype(float)
+
+            sci_wcs = WCS(sci_hdul[0])
+
+            with fits.open(wht_path) as wht_hdul:
+                wht_img = wht_hdul[0].data.astype(float)
+
+                from astropy import stats
+
+                sci_data = sci_img[wht_img != 0]
+
+                pixscale = (sci_wcs.proj_plane_pixel_area() ** 0.5).to(u.arcsec).value
+                filt_box = int(bkg_box_size / pixscale)
+
+                thresh = 5 * stats.mad_std(sci_data)
+
+                bkg = background.Background2D(
+                    sci_img,
+                    (filt_box, filt_box),
+                    mask=sci_img >= thresh,
+                    coverage_mask=wht_img == 0,
+                )
+
+                bkg_data = bkg.background
+
+                bkg_data = convolve_fft(
+                    bkg_data,
+                    Gaussian2DKernel(
+                        x_stddev=smooth_gauss_std / pixscale,
+                        y_stddev=smooth_gauss_std / pixscale,
+                    ),
+                )
+                bkg_data[bkg_data <= min_bkg_thresh] = 0.0
+
+                all_bkgs[filt] = bkg_data
+
+                sci_hdul[0].data = bkg_data
+                sci_hdul.writeto(
+                    img_backup_dir / f"{sci_path.stem}_bkg.fits", overwrite=True
+                )
+                sci_hdul.writeto(sci_path, overwrite=True)
+
+    auto_script.make_filter_combinations(
+        field_root,
+        filter_combinations={"ir": [f.upper() for f in filters]},
+    )
+
+    multiband_catalog_args = auto_script.get_yml_parameters()["multiband_catalog_args"]
+    multiband_catalog_args["run_detection"] = True
+    multiband_catalog_args["detection_background"] = False
+    multiband_catalog_args["photometry_background"] = False
+    multiband_catalog_args["threshold"] = 1.0
+    multiband_catalog_args["filters"] = filters
+    multiband_catalog_args["detection_params"] = {
+        "minarea": 9,
+        "filter_kernel": None,
+        "filter_type": "matched",
+        "clean": True,
+        "clean_param": 1,
+        "deblend_nthresh": 32,
+        "deblend_cont": 0.001,
+    }
+    multiband_catalog_args["rescale_weight"] = False
+    multiband_catalog_args["det_err_scale"] = 1.0
+
+    phot_cat = auto_script.multiband_catalog(
+        field_root=field_root,
+        **multiband_catalog_args,
+    )
+
+    kwargs = auto_script.get_yml_parameters()
+
+    os.chdir(prep_dir)
+
+    rate_files = [str(s) for s in Path.cwd().glob("*_rate.fits")][:]
+
+    grism_prep_fn(rate_files=rate_files, grism_prep_kwargs=kwargs["grism_prep_args"])
+
+    rate_backup_dir = prep_dir / "rate_backup"
+    rate_backup_dir.mkdir(exist_ok=True, parents=True)
+
+    # prep_dir = prep_dir / "../Prep_v1"
+
+    for flt_path in prep_dir.glob("*GrismFLT.fits"):
+        flt_model = fits.getdata(flt_path, "MODEL")
+        # print (flt_path.stem.removesuffix(".01.GrismFLT"))
+        rate_path = prep_dir / f"{flt_path.stem.removesuffix(".01.GrismFLT")}_rate.fits"
+
+        if not (rate_backup_dir / rate_path.name).is_file():
+            copy2(rate_path, rate_backup_dir / rate_path.name)
+
+        with fits.open(rate_path) as rate_hdul:
+
+            rate_hdul["SCI"].data[rate_hdul["ERR"].data > 0] -= flt_model[
+                flt_pad:-flt_pad, flt_pad:-flt_pad
+            ][rate_hdul["ERR"].data > 0]
+
+            rate_hdul.writeto(rate_path, overwrite=True)
+
+    background_backup_dir = prep_dir / "bkg_backups"
+    background_backup_dir.mkdir(exist_ok=True, parents=True)
+    for file in list(prep_dir.glob(f"{field_root}-ir*")) + [
+        prep_dir / f"{field_root}_phot.fits"
+    ]:
+        file.replace(background_backup_dir / file.name)
+
+    for filt in filters:
+        sci_path = list(img_backup_dir.glob(f"{field_root}*{filt}_dr[zc]_sci.fits"))[0]
+        wht_path = list(img_backup_dir.glob(f"{field_root}*{filt}_dr[zc]_wht.fits"))[0]
+        bkg_path = list(
+            img_backup_dir.glob(f"{field_root}*{filt}_dr[zc]_sci_bkg.fits")
+        )[0]
+        bkg_data = fits.getdata(bkg_path)
+
+        # for file_path in [sci_path, wht_path]:
+        with fits.open(sci_path) as hdul:
+            hdul[0].data -= bkg_data
+            hdul[0].header["GRBKGSUB"] = True
+            hdul.writeto(prep_dir / sci_path.name, overwrite=True)
+        with fits.open(wht_path) as hdul:
+            # hdul[0].data -= bkg_data
+            hdul.writeto(prep_dir / wht_path.name, overwrite=True)
+
+    grism_backup_dir = prep_dir / "grism_backups"
+    grism_backup_dir.mkdir(exist_ok=True, parents=True)
+    for file in prep_dir.glob("*.GrismFLT.*"):
+        print(file)
+        file.replace(grism_backup_dir / file.name)
+        os.unlink(prep_dir / "../Extractions" / file.name)
+
+    os.chdir(prep_dir)
+
+    auto_script.make_filter_combinations(
+        field_root,
+        filter_combinations={"ir": [f.upper() for f in filters]},
+    )
