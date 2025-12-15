@@ -1,8 +1,8 @@
-.. _niriss-tools-c_utils:
+.. _niriss-tools-pipeline:
 
-*****************
-Utility Functions
-*****************
+*******************
+Pipeline
+*******************
 
 Introduction? Filler text? Tutorial?
 

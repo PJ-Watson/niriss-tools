@@ -540,6 +540,57 @@ def reproject_image(
                 **reproject_kwargs,
             )
 
+            # from drizzlepac import adrizzle
+            # from grizli import utils as grizli_utils
+
+            # adrizzle.log.setLevel("ERROR")
+            # drizzler = adrizzle.do_driz
+
+            # orig_data = orig_hdul[input_hdu_index].data
+            # orig_wcs = WCS(orig_hdul[input_hdu_index])
+
+            # orig_wcs.pscale = np.abs(grizli_utils.get_wcs_pscale(orig_wcs))
+            # output_wcs.pscale = np.abs(grizli_utils.get_wcs_pscale(output_wcs))
+
+            # print (orig_wcs.pscale, output_wcs.pscale)
+            # # exit()
+
+            # sh = output_shape
+            # outsci = np.zeros(sh, dtype=np.float32)
+            # outwht = np.zeros(sh, dtype=np.float32)
+            # outctx = np.zeros(sh, dtype=np.int32)
+
+            # drizzler(
+            #     # orig_data.astype(np.float32),
+            #     # orig_wcs,
+            #     # np.ones_like(orig_data).astype(np.float32),
+            #     orig_data[crop_slice].astype(np.float32),
+            #     orig_wcs[crop_slice],
+            #     np.ones_like(orig_data[crop_slice]).astype(np.float32),
+            #     output_wcs,
+            #     outsci,
+            #     outwht,
+            #     outctx,
+            #     1.0,
+            #     "cps",
+            #     1,
+            #     wcslin_pscale=orig_wcs.pscale,
+            #     uniqid=1,
+            #     pixfrac=1.0,
+            #     kernel="square",
+            #     fillval="0",
+            #     wcsmap=grizli_utils.WCSMapAll,
+            # )
+
+            # area_ratio = (orig_wcs.pscale / output_wcs.pscale)**2
+
+            # spatial_scale = 1.0
+            # flux_density_scale = spatial_scale**2
+
+            # outsci *= area_ratio * flux_density_scale
+
+            # repr_output = outsci
+
             # Check if footprint array returned
             if type(repr_output) == tuple:
                 out_hdul.append(

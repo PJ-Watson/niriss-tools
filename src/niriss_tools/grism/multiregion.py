@@ -501,8 +501,8 @@ class MultiRegionFit:
         Raises
         ------
         IOError
-            If no *beams.fits file can be found, this method will raise an
-            error.
+            If no ``*beams.fits`` file can be found, this method will
+            raise an error.
         """
 
         binned_data_dir = self.out_dir / "binned_data"
