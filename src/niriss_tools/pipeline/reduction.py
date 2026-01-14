@@ -431,8 +431,10 @@ def process_using_aws(
             False
         ),  # Otherwise removes "rate.fits" files from the working directory!
         "s3output": None,
-        "make_exptime_map": False,
-        "weight_type": "jwst",
+        "make_exptime_map": True,
+        "expmap_sample_factor": 1,
+        "expmap_keep_small": False,
+        "weight_type": "jwst_var",
         "skip_existing": False,
         "context": os.environ["CRDS_CONTEXT"],
     }
@@ -672,7 +674,14 @@ def grism_background_subtraction(
 
     for flt_path in prep_dir.glob("*GrismFLT.fits"):
         flt_model = fits.getdata(flt_path, "MODEL")
-        # print (flt_path.stem.removesuffix(".01.GrismFLT"))
+        flt_hdr = fits.getheader(flt_path, "MODEL")
+        flt_pad = np.array(
+            [
+                flt_hdr["CRPIX1"] - flt_hdr["CRPIX1A"],
+                flt_hdr["CRPIX2"] - flt_hdr["CRPIX2A"],
+            ]
+        ).astype(int)
+
         rate_path = prep_dir / f"{flt_path.stem.removesuffix(".01.GrismFLT")}_rate.fits"
 
         if not (rate_backup_dir / rate_path.name).is_file():
@@ -681,7 +690,8 @@ def grism_background_subtraction(
         with fits.open(rate_path) as rate_hdul:
 
             rate_hdul["SCI"].data[rate_hdul["ERR"].data > 0] -= flt_model[
-                flt_pad:-flt_pad, flt_pad:-flt_pad
+                flt_pad[0] : -flt_pad[0],
+                flt_pad[1] : -flt_pad[1],
             ][rate_hdul["ERR"].data > 0]
 
             rate_hdul.writeto(rate_path, overwrite=True)

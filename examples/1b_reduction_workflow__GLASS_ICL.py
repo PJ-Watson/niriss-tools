@@ -150,7 +150,7 @@ if __name__ == "__main__":
         hdr = fits.getheader(grizli_home_dir / "Prep" / f"{field_name}-ir_drc_sci.fits")
         assert hdr.get("GRBKGSUB", False), "Running grism background subtraction"
     except:
-        pipeline.grism_background_subtraction(prep_fn=grism_prep_wrapper)
+        pipeline.grism_background_subtraction(grism_prep_fn=grism_prep_wrapper)
 
     if not (Path.cwd() / f"{field_name}_phot.fits").is_file():
 
@@ -225,6 +225,12 @@ if __name__ == "__main__":
     # The usual extraction code follows
 
     os.chdir(grizli_home_dir / "Extractions")
+
+    # Remove bad exposure (should have done this earlier tbh)
+    for f in (grizli_home_dir / "Extractions").glob("jw01324001001_09101_00002_nis*"):
+        if f.is_symlink():
+            f.unlink()
+
     flt_files = [str(s) for s in Path.cwd().glob("*GrismFLT.fits")][:]
 
     grp = multifit.GroupFLT(
