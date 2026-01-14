@@ -1,5 +1,5 @@
 Reference/API
 *************
 
-.. automodapi:: niriss_tools.c_utils
+.. automodapi:: niriss_tools.pipeline
    :inherited-members:
