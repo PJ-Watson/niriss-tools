@@ -167,6 +167,13 @@ CLOUDY_LINE_MAP = [
         "grizli": "HeI-3889",
         "wave": 3889.75,
     },
+    {
+        "cloudy": [
+            "Ne 3  3868.76A",
+        ],
+        "grizli": "NeIII-3867",
+        "wave": 3869.87,
+    },
 ]
 
 # In Angstroms

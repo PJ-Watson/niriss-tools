@@ -997,6 +997,8 @@ class MultiRegionFit:
         try:
             import adelie
 
+            print("Using `adelie` solver.")
+
             HAS_ADELIE = True
         except:
             HAS_ADELIE = False
@@ -1479,21 +1481,7 @@ class MultiRegionFit:
 
                 # Three different methods of fitting, each with different call
                 # signatures and return values
-                if nnls_method == "scipy":
-
-                    coeffs, rnorm, info = scipy.optimize._nnls._nnls(
-                        stacked_Ax, y + off, _nnls_i
-                    )
-                    coeffs[:num_stacks] -= off
-
-                elif nnls_method == "numba":
-
-                    nnls_solver = CDNNLS(stacked_Ax, y + off)
-                    nnls_solver.run(n_iter=_nnls_i, epsilon=_nnls_t)
-                    coeffs = nnls_solver.w
-                    coeffs[:num_stacks] -= off
-
-                elif nnls_method == "adelie" and HAS_ADELIE:
+                if nnls_method == "adelie" and HAS_ADELIE:
                     state = adelie.solver.bvls(
                         stacked_Ax,
                         y + off,
@@ -1508,6 +1496,21 @@ class MultiRegionFit:
                     coeffs = deepcopy(state.beta)
                     coeffs[:num_stacks] -= off
                     del state
+
+                elif nnls_method == "numba":
+
+                    nnls_solver = CDNNLS(stacked_Ax, y + off)
+                    nnls_solver.run(n_iter=_nnls_i, epsilon=_nnls_t)
+                    coeffs = nnls_solver.w
+                    coeffs[:num_stacks] -= off
+
+                # elif nnls_method == "scipy":
+                else:
+
+                    coeffs, rnorm, info = scipy.optimize._nnls._nnls(
+                        stacked_Ax, y + off, _nnls_i
+                    )
+                    coeffs[:num_stacks] -= off
 
                 t2 = time()
                 print(f"NNLS fitting... DONE {t2-t1:.3f}s")
