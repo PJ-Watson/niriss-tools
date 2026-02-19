@@ -12,7 +12,12 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 from numpy.typing import ArrayLike
-from vorbin.voronoi_2d_binning import voronoi_2d_binning
+
+try:
+    POWERBIN_AVAIL = True
+    from powerbin import PowerBin
+except:
+    POWERBIN_AVAIL = False
 
 from niriss_tools.sed import colour_binning
 
@@ -134,6 +139,7 @@ def constrained_adaptive(
     wvt: bool = True,
     mask: ArrayLike | None = None,
     use_hex: bool = True,
+    use_powerbin: bool = True,
 ) -> tuple[ArrayLike, int, ArrayLike, ArrayLike]:
     """
     Perform a constrained adaptive binning method to reach a target S/N.
@@ -181,6 +187,8 @@ def constrained_adaptive(
         Whether to perform the first stage of the binning procedure. If
         ``False``, then this will be skipped, and only the Voronoi binning
         procedure will be attempted. By default ``True``.
+    use_powerbin : bool, optional
+        Use the PowerBin algorithm instead.
 
     Returns
     -------
@@ -225,25 +233,63 @@ def constrained_adaptive(
 
     num_hex_bins = len(np.unique(hex_idxs[good_hex_data]))
 
-    vorbin_idx = ~good_hex_data & np.isfinite(f_noise) & (f_noise > 0) & (f_signal > 0)
+    vorbin_idx = (
+        ~good_hex_data & np.isfinite(f_noise) & np.isfinite(f_signal) & (f_noise > 0)
+    )  # & (f_signal > 0)
 
     if mask is not None:
         vorbin_idx &= ~mask.ravel()
 
-    vorbin_output = voronoi_2d_binning(
-        x=X.ravel()[vorbin_idx],
-        y=Y.ravel()[vorbin_idx],
-        signal=f_signal[vorbin_idx],
-        noise=f_noise[vorbin_idx],
-        target_sn=target_sn,
-        pixelsize=1,
-        plot=False,
-        quiet=quiet,
-        cvt=cvt,
-        wvt=wvt,
-    )
+    if POWERBIN_AVAIL and use_powerbin:
 
-    vor_idxs, vor_inv = np.unique(vorbin_output[0], return_inverse=True)
+        def capacity_spec(index):
+            """Calculates (S/N)^2 for a bin from its pixel indices."""
+            # Standard S/N formula for uncorrelated noise
+            sn = np.sum(f_signal[vorbin_idx][index]) / np.sqrt(
+                np.sum(f_noise[vorbin_idx][index] ** 2)
+            )
+            # Example for correlated noise (see full example file for details):
+            # sn /= 1 + 1.07 * np.log10(len(index))
+            return sn**2
+
+        # print(
+        #     f_signal[vorbin_idx],
+        #     f_noise[vorbin_idx],
+        #     (np.any(f_signal[vorbin_idx] <= 0)),
+        #     (np.any(f_noise[vorbin_idx] <= 0)),
+        # )
+        pow_obj = PowerBin(
+            np.column_stack([X.ravel()[vorbin_idx], Y.ravel()[vorbin_idx]]),
+            capacity_spec,
+            target_capacity=target_sn**2,
+            # verbose=3,
+            pixelsize=1.0,
+        )
+
+        # pow_obj.plot(capacity_scale='sqrt', ylabel='S/N')
+        # plt.show()
+
+        vor_idxs, vor_inv = np.unique(pow_obj.bin_num, return_inverse=True)
+
+    else:
+
+        from vorbin.voronoi_2d_binning import voronoi_2d_binning
+
+        vorbin_output = voronoi_2d_binning(
+            x=X.ravel()[vorbin_idx],
+            y=Y.ravel()[vorbin_idx],
+            signal=f_signal[vorbin_idx],
+            noise=f_noise[vorbin_idx],
+            target_sn=target_sn,
+            pixelsize=1,
+            plot=False,
+            quiet=quiet,
+            cvt=cvt,
+            wvt=wvt,
+        )
+
+        vor_idxs, vor_inv = np.unique(vorbin_output[0], return_inverse=True)
+
     vor_idxs += np.max(hex_idxs) + 1
 
     num_vor_bins = len(np.unique(vor_idxs))

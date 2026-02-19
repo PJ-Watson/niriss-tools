@@ -178,6 +178,7 @@ def seg_slice(
     seg_map: ArrayLike,
     seg_id: int,
     padding: int = 50,
+    equal_ratio: bool = False,
 ) -> tuple:
     """
     Find the location of an object in a segmentation map.
@@ -191,6 +192,8 @@ def seg_slice(
         The ID of the object to find.
     padding : int, optional
         The extra padding to add to the object boundaries, by default 50.
+    equal_ratio : bool, optiona
+        Force the slice to be a square.
 
     Returns
     -------
@@ -205,14 +208,27 @@ def seg_slice(
     y_min = np.nanmin(y_idxs)
     y_max = np.nanmax(y_idxs)
 
+    x_pad = y_pad = padding
+    if equal_ratio:
+        x_width = x_max - x_min
+        y_width = y_max - y_min
+        if x_width > y_width:
+            y_pad = (x_width - y_width) // 2 + padding
+            x_pad = padding
+        elif x_width > y_width:
+            x_pad = (x_width - y_width) // 2 + padding
+            y_pad = padding
+        else:
+            pass
+
     new_idxs = (
         slice(
-            int(np.nanmax([x_min - padding, 0])),
-            int(np.nanmin([x_max + padding, seg_map.shape[0]])),
+            int(np.nanmax([x_min - x_pad, 0])),
+            int(np.nanmin([x_max + x_pad, seg_map.shape[0]])),
         ),
         slice(
-            int(np.nanmax([y_min - padding, 0])),
-            int(np.nanmin([y_max + padding, seg_map.shape[1]])),
+            int(np.nanmax([y_min - y_pad, 0])),
+            int(np.nanmin([y_max + y_pad, seg_map.shape[1]])),
         ),
     )
     return new_idxs

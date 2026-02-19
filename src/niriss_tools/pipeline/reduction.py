@@ -67,20 +67,24 @@ def stsci_det1(
 
     if len(files_to_process) > 0:
 
-        from joblib import Parallel, delayed
+        run_det1(files_to_process[0], raw_output_dir, **kwargs)
 
-        Parallel(
-            n_jobs=cpu_count,
-            backend=joblib_backend,
-            verbose=50,
-        )(
-            delayed(run_det1)(
-                uncal_path=file,
-                output_dir=raw_output_dir,
-                **kwargs,
+        if len(files_to_process) > 1:
+
+            from joblib import Parallel, delayed
+
+            Parallel(
+                n_jobs=cpu_count,
+                backend=joblib_backend,
+                verbose=50,
+            )(
+                delayed(run_det1)(
+                    uncal_path=file,
+                    output_dir=raw_output_dir,
+                    **kwargs,
+                )
+                for file in files_to_process[1:]
             )
-            for file in files_to_process
-        )
 
 
 def run_det1(uncal_path: PathLike, output_dir: PathLike, **kwargs):

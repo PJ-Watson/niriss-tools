@@ -27,6 +27,7 @@ dependencies = [
     "scipy>=1.13",
     "Cython>=3",
     "vorbin",
+    "powerbin",
     "reproject>=0.14",
     # One day I hope this dependency hell with drizzlepac can be resolved
     # Update: fine, I'll do it myself
