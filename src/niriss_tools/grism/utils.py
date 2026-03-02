@@ -14,6 +14,7 @@ from astropy.wcs import WCS
 from grizli import utils as grizli_utils
 from grizli.model import BeamCutout, GrismDisperser
 from grizli.multifit import MultiBeam
+from tqdm import tqdm
 
 __all__ = ["gen_stacked_beams", "align_direct_images"]
 
@@ -25,6 +26,8 @@ def gen_stacked_beams(
     dfillval: float = 0,
     fit_trace_shift: bool = False,
     trace_shift_kwargs: dict = {},
+    cluster_beams: bool = False,
+    dbscan_kwargs: dict = {"eps": 5},
     **multibeam_kwargs,
 ):
     """
@@ -61,6 +64,14 @@ def gen_stacked_beams(
     trace_shift_kwargs : dict, optional
         Additional keyword arguments to pass through to
         `~grizli.multifit.MultiBeam.fit_trace_shift()` if used.
+    cluster_beams : bool, optional
+        Cluster the beams based on their detector position before
+        stacking, using the DBSCAN algorithm. This can minimise residuals
+        arising from the trace variation across the detector, at the cost
+        of an increased number of stacked beams. By default ``False``.
+    dbscan_kwargs : dict, optional
+        Any additional parameters to pass through to
+        `sklean.cluster.DBSCAN`. By default ``dbscan_kwargs={"eps":5}``.
     **multibeam_kwargs : dict, optional
         Any additional parameters to pass through to
         `~grizli.multifit.MultiBeam` when loading the original object.
@@ -84,247 +95,278 @@ def gen_stacked_beams(
 
     new_beam_list = []
 
-    for filt, pa_info in mb.PA.items():
-        for pa, beam_idxs in pa_info.items():
+    for filt, pa_info in tqdm(mb.PA.items(), desc="Stacking beams"):
+        for pa, pa_beam_idxs in pa_info.items():
 
-            # As a reference beam, we use the one with the smallest shift from the centre
-            # along the x-axis
-            # This minimises the chance of trace pixel errors due to integer rounding
-            # in the grizli and grismconf code
-            direct_cen = (
-                np.asarray(mb.beams[beam_idxs[0]].direct.data["REF"].shape[::-1])  # + 1
-            ) / 2
+            if cluster_beams:
 
-            shift_dx = np.zeros((len(beam_idxs), 2))
-            for i, b_i in enumerate(beam_idxs):
-                shift_dx[i] = direct_cen - np.array(
-                    mb.beams[b_i]
-                    .direct.wcs.all_world2pix(
+                pa_beam_idxs = np.array(pa_beam_idxs)
+
+                # Detector coordinate centres
+                detector_coords = np.array(
+                    [[mb.beams[b].beam.xc, mb.beams[b].beam.yc] for b in pa_beam_idxs]
+                )
+
+                from sklearn.cluster import DBSCAN
+
+                db = DBSCAN(**dbscan_kwargs).fit(detector_coords)
+                labels = np.array(db.labels_)
+
+                grouped_beam_idxs = [
+                    pa_beam_idxs[labels == u] for u in np.unique(labels)
+                ]
+
+            else:
+                grouped_beam_idxs = [pa_beam_idxs]
+
+            print(grouped_beam_idxs)
+
+            for beam_idxs in grouped_beam_idxs:
+
+                # As a reference beam, we use the one with the smallest shift from the centre
+                # along the x-axis
+                # This minimises the chance of trace pixel errors due to integer rounding
+                # in the grizli and grismconf code
+                direct_cen = (
+                    np.asarray(
+                        mb.beams[beam_idxs[0]].direct.data["REF"].shape[::-1]
+                    )  # + 1
+                ) / 2
+
+                shift_dx = np.zeros((len(beam_idxs), 2))
+                for i, b_i in enumerate(beam_idxs):
+                    shift_dx[i] = direct_cen - np.array(
+                        mb.beams[b_i]
+                        .direct.wcs.all_world2pix(
+                            [[mb.ra, mb.dec]],
+                            1,
+                            ra_dec_order=True,
+                        )
+                        .flatten()
+                    )
+
+                new_beam = deepcopy(
+                    mb.beams[
+                        beam_idxs[
+                            np.argmin(np.abs(shift_dx[:, 0] - np.round(shift_dx[:, 0])))
+                        ]
+                    ]
+                )
+
+                # Set centre of direct image to the actual coordinates
+                shift_crpix = direct_cen - np.array(
+                    new_beam.direct.wcs.all_world2pix(
                         [[mb.ra, mb.dec]],
                         1,
                         ra_dec_order=True,
-                    )
-                    .flatten()
+                    ).flatten()
                 )
 
-            new_beam = deepcopy(
-                mb.beams[
-                    beam_idxs[
-                        np.argmin(np.abs(shift_dx[:, 0] - np.round(shift_dx[:, 0])))
-                    ]
-                ]
-            )
-
-            # Set centre of direct image to the actual coordinates
-            shift_crpix = direct_cen - np.array(
-                new_beam.direct.wcs.all_world2pix(
-                    [[mb.ra, mb.dec]],
-                    1,
-                    ra_dec_order=True,
-                ).flatten()
-            )
-
-            new_beam.grism.wcs = grizli_utils.transform_wcs(
-                new_beam.grism.wcs,
-                translation=[
-                    shift_crpix[0] - new_beam.beam.xoffset,
-                    shift_crpix[1] - new_beam.beam.yoffset,
-                ],
-            )
-            new_beam.direct.wcs = grizli_utils.transform_wcs(
-                new_beam.direct.wcs, translation=shift_crpix
-            )
-
-            sh = new_beam.sh
-            outsci = np.zeros(sh, dtype=np.float32)
-            outwht = np.zeros(sh, dtype=np.float32)
-            outctx = np.zeros(sh, dtype=np.int32)
-
-            outvar = np.zeros(sh, dtype=np.float32)
-            outwv = np.zeros(sh, dtype=np.float32)
-            outcv = np.zeros(sh, dtype=np.int32)
-
-            outcon = np.zeros(sh, dtype=np.float32)
-            outwc = np.zeros(sh, dtype=np.float32)
-            outcc = np.zeros(sh, dtype=np.int32)
-
-            outdir = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
-            outwd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
-            outcd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.int32)
-
-            grism_data = [mb.beams[i].grism.data["SCI"] for i in beam_idxs]
-            direct_data = [mb.beams[i].direct.data["REF"] for i in beam_idxs]
-
-            dir_scale = np.nanmedian(new_beam.direct.data["REF"] / new_beam.beam.direct)
-
-            new_seg = grizli_utils.blot_nearest_exact(
-                mb.beams[beam_idxs[0]].beam.seg,
-                mb.beams[beam_idxs[0]].direct.wcs,
-                new_beam.direct.wcs,
-                verbose=False,
-                stepsize=-1,
-                scale_by_pixel_area=False,
-            )
-
-            for i, idx in enumerate(beam_idxs):
-
-                beam = mb.beams[idx]
-                direct_wcs_i = beam.direct.wcs.copy()
-                grism_wcs_i = grizli_utils.transform_wcs(
-                    beam.grism.wcs.copy(),
-                    translation=[-beam.beam.xoffset, -beam.beam.yoffset],
+                new_beam.grism.wcs = grizli_utils.transform_wcs(
+                    new_beam.grism.wcs,
+                    translation=[
+                        shift_crpix[0] - new_beam.beam.xoffset,
+                        shift_crpix[1] - new_beam.beam.yoffset,
+                    ],
+                )
+                new_beam.direct.wcs = grizli_utils.transform_wcs(
+                    new_beam.direct.wcs, translation=shift_crpix
                 )
 
-                contam_weight = np.exp(
-                    -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
-                )
-                grism_wht = beam.ivar * contam_weight
-                grism_wht[~np.isfinite(grism_wht)] = 0.0
-                contam_wht = beam.ivar
-                contam_wht[~np.isfinite(contam_wht)] = 0.0
+                sh = new_beam.sh
+                outsci = np.zeros(sh, dtype=np.float32)
+                outwht = np.zeros(sh, dtype=np.float32)
+                outctx = np.zeros(sh, dtype=np.int32)
 
-                drizzler(
-                    direct_data[i],
-                    direct_wcs_i,
-                    np.ones_like(direct_data[i]),
+                outvar = np.zeros(sh, dtype=np.float32)
+                outwv = np.zeros(sh, dtype=np.float32)
+                outcv = np.zeros(sh, dtype=np.int32)
+
+                outcon = np.zeros(sh, dtype=np.float32)
+                outwc = np.zeros(sh, dtype=np.float32)
+                outcc = np.zeros(sh, dtype=np.int32)
+
+                outdir = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
+                outwd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.float32)
+                outcd = np.zeros(new_beam.direct.data["REF"].shape, dtype=np.int32)
+
+                grism_data = [mb.beams[i].grism.data["SCI"] for i in beam_idxs]
+                direct_data = [mb.beams[i].direct.data["REF"] for i in beam_idxs]
+
+                dir_scale = np.nanmedian(
+                    new_beam.direct.data["REF"] / new_beam.beam.direct
+                )
+
+                new_seg = grizli_utils.blot_nearest_exact(
+                    mb.beams[beam_idxs[0]].beam.seg,
+                    mb.beams[beam_idxs[0]].direct.wcs,
                     new_beam.direct.wcs,
-                    outdir,
-                    outwd,
-                    outcd,
-                    1.0,
-                    "cps",
-                    1,
-                    wcslin_pscale=1.0,
-                    uniqid=1,
-                    pixfrac=pixfrac,
-                    kernel=kernel,
-                    fillval=dfillval,
-                    wcsmap=grizli_utils.WCSMapAll,
-                )
-                drizzler(
-                    grism_data[i],
-                    grism_wcs_i,
-                    grism_wht,
-                    new_beam.grism.wcs,
-                    outsci,
-                    outwht,
-                    outctx,
-                    1.0,
-                    "cps",
-                    1,
-                    wcslin_pscale=1.0,
-                    uniqid=1,
-                    pixfrac=pixfrac,
-                    kernel=kernel,
-                    fillval=dfillval,
-                    wcsmap=grizli_utils.WCSMapAll,
-                )
-                drizzler(
-                    beam.contam,
-                    grism_wcs_i,
-                    contam_wht,
-                    new_beam.grism.wcs,
-                    outcon,
-                    outwc,
-                    outcc,
-                    1.0,
-                    "cps",
-                    1,
-                    wcslin_pscale=1.0,
-                    uniqid=1,
-                    pixfrac=pixfrac,
-                    kernel=kernel,
-                    fillval=dfillval,
-                    wcsmap=grizli_utils.WCSMapAll,
+                    verbose=False,
+                    stepsize=-1,
+                    scale_by_pixel_area=False,
                 )
 
-                drizzler(
-                    contam_weight,
-                    grism_wcs_i,
-                    grism_wht,
-                    new_beam.grism.wcs,
-                    outvar,
-                    outwv,
-                    outcv,
-                    1.0,
-                    "cps",
-                    1,
-                    wcslin_pscale=1.0,
-                    uniqid=1,
-                    pixfrac=pixfrac,
-                    kernel=kernel,
-                    fillval=dfillval,
-                    wcsmap=grizli_utils.WCSMapAll,
+                for i, idx in enumerate(beam_idxs):
+
+                    beam = mb.beams[idx]
+                    direct_wcs_i = beam.direct.wcs.copy()
+                    grism_wcs_i = grizli_utils.transform_wcs(
+                        beam.grism.wcs.copy(),
+                        translation=[-beam.beam.xoffset, -beam.beam.yoffset],
+                    )
+
+                    contam_weight = np.exp(
+                        -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
+                    )
+                    grism_wht = beam.ivar * contam_weight
+                    grism_wht[~np.isfinite(grism_wht)] = 0.0
+                    contam_wht = beam.ivar
+                    contam_wht[~np.isfinite(contam_wht)] = 0.0
+
+                    drizzler(
+                        direct_data[i],
+                        direct_wcs_i,
+                        np.ones_like(direct_data[i]),
+                        new_beam.direct.wcs,
+                        outdir,
+                        outwd,
+                        outcd,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                        wcsmap=grizli_utils.WCSMapAll,
+                    )
+                    drizzler(
+                        grism_data[i],
+                        grism_wcs_i,
+                        grism_wht,
+                        new_beam.grism.wcs,
+                        outsci,
+                        outwht,
+                        outctx,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                        wcsmap=grizli_utils.WCSMapAll,
+                    )
+                    drizzler(
+                        beam.contam,
+                        grism_wcs_i,
+                        contam_wht,
+                        new_beam.grism.wcs,
+                        outcon,
+                        outwc,
+                        outcc,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                        wcsmap=grizli_utils.WCSMapAll,
+                    )
+
+                    drizzler(
+                        contam_weight,
+                        grism_wcs_i,
+                        grism_wht,
+                        new_beam.grism.wcs,
+                        outvar,
+                        outwv,
+                        outcv,
+                        1.0,
+                        "cps",
+                        1,
+                        wcslin_pscale=1.0,
+                        uniqid=1,
+                        pixfrac=pixfrac,
+                        kernel=kernel,
+                        fillval=dfillval,
+                        wcsmap=grizli_utils.WCSMapAll,
+                    )
+
+                # Correct for drizzle scaling
+                area_ratio = 1.0 / new_beam.grism.wcs.pscale**2
+
+                # preserve flux density
+                spatial_scale = 1.0
+                flux_density_scale = spatial_scale**2
+
+                # science
+                outsci *= area_ratio * flux_density_scale
+                # Direct
+                outdir *= area_ratio * flux_density_scale
+                # Variance
+                outvar *= area_ratio / outwv * flux_density_scale**2
+                outwht = 1 / outvar
+                outwht[(outvar == 0) | (~np.isfinite(outwht))] = 0
+                # Contam
+                outcon *= area_ratio * flux_density_scale
+
+                new_beam.grism.data["SCI"] = outsci
+                new_beam.grism.data["ERR"] = np.sqrt(outvar)
+                new_beam.grism.data["DQ"] = np.zeros_like(outsci)
+                new_beam.contam = outcon
+                new_beam.direct.data["REF"] = outdir
+                new_beam.direct.header.update(
+                    grizli_utils.to_header(new_beam.direct.wcs)
+                )
+                new_beam.grism.header.update(grizli_utils.to_header(new_beam.grism.wcs))
+
+                new_beam.beam = GrismDisperser(
+                    id=mb.id,
+                    direct=outdir,
+                    segmentation=new_seg,
+                    origin=np.nanmedian(
+                        np.asarray([mb.beams[i].direct.origin for i in beam_idxs]),
+                        axis=0,
+                    ),
+                    pad=np.nanmedian(
+                        np.asarray([mb.beams[i].direct.pad for i in beam_idxs]),
+                        axis=0,
+                    ),
+                    grow=np.nanmedian(
+                        np.asarray([mb.beams[i].direct.grow for i in beam_idxs]),
+                        axis=0,
+                    ),
+                    beam=mb.beams[beam_idxs[0]].beam.beam,
+                    xcenter=0,
+                    ycenter=0,
+                    conf=mb.beams[beam_idxs[0]].beam.conf,
+                    fwcpos=mb.beams[beam_idxs[0]].beam.fwcpos,
+                    MW_EBV=mb.beams[beam_idxs[0]].beam.MW_EBV,
+                    xoffset=0.0,
+                    yoffset=0.0,
+                )
+                new_beam.beam.compute_model()
+
+                new_beam.modelf = new_beam.beam.modelf
+                new_beam.model = new_beam.beam.modelf.reshape(new_beam.beam.sh_beam)
+                # new_beam.compute_model()
+                new_beam._parse_from_data(
+                    isJWST=True,
+                    contam_sn_mask=[10, 3],
+                    min_mask=mb.min_mask,
+                    min_sens=mb.min_sens,
+                    mask_resid=mb.mask_resid,
                 )
 
-            # Correct for drizzle scaling
-            area_ratio = 1.0 / new_beam.grism.wcs.pscale**2
+                new_beam.direct.data["REF"] /= dir_scale
+                new_beam.direct.ref_photflam = new_beam.direct.photflam
 
-            # preserve flux density
-            spatial_scale = 1.0
-            flux_density_scale = spatial_scale**2
-
-            # science
-            outsci *= area_ratio * flux_density_scale
-            # Direct
-            outdir *= area_ratio * flux_density_scale
-            # Variance
-            outvar *= area_ratio / outwv * flux_density_scale**2
-            outwht = 1 / outvar
-            outwht[(outvar == 0) | (~np.isfinite(outwht))] = 0
-            # Contam
-            outcon *= area_ratio * flux_density_scale
-
-            new_beam.grism.data["SCI"] = outsci
-            new_beam.grism.data["ERR"] = np.sqrt(outvar)
-            new_beam.grism.data["DQ"] = np.zeros_like(outsci)
-            new_beam.contam = outcon
-            new_beam.direct.data["REF"] = outdir
-            new_beam.direct.header.update(grizli_utils.to_header(new_beam.direct.wcs))
-            new_beam.grism.header.update(grizli_utils.to_header(new_beam.grism.wcs))
-
-            new_beam.beam = GrismDisperser(
-                id=mb.id,
-                direct=outdir,
-                segmentation=new_seg,
-                origin=np.nanmedian(
-                    np.asarray([mb.beams[i].direct.origin for i in beam_idxs]),
-                    axis=0,
-                ),
-                pad=np.nanmedian(
-                    np.asarray([mb.beams[i].direct.pad for i in beam_idxs]),
-                    axis=0,
-                ),
-                grow=np.nanmedian(
-                    np.asarray([mb.beams[i].direct.grow for i in beam_idxs]),
-                    axis=0,
-                ),
-                beam=mb.beams[beam_idxs[0]].beam.beam,
-                xcenter=0,
-                ycenter=0,
-                conf=mb.beams[beam_idxs[0]].beam.conf,
-                fwcpos=mb.beams[beam_idxs[0]].beam.fwcpos,
-                MW_EBV=mb.beams[beam_idxs[0]].beam.MW_EBV,
-                xoffset=0.0,
-                yoffset=0.0,
-            )
-            new_beam.beam.compute_model()
-
-            new_beam.modelf = new_beam.beam.modelf
-            new_beam.model = new_beam.beam.modelf.reshape(new_beam.beam.sh_beam)
-            # new_beam.compute_model()
-            new_beam._parse_from_data(
-                isJWST=True,
-                contam_sn_mask=[10, 3],
-                min_mask=mb.min_mask,
-                min_sens=mb.min_sens,
-                mask_resid=mb.mask_resid,
-            )
-
-            new_beam.direct.data["REF"] /= dir_scale
-            new_beam.direct.ref_photflam = new_beam.direct.photflam
-
-            new_beam_list.append(new_beam)
+                new_beam_list.append(new_beam)
 
     new_multibeam = MultiBeam(
         new_beam_list,
