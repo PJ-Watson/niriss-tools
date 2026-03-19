@@ -82,8 +82,9 @@ def gen_stacked_beams(
         The stacked multibeam object.
     """
 
-    if type(mb) is str:
-        mb = MultiBeam(beams=str(mb), **multibeam_kwargs)
+    # if type(mb) is str:
+    if not isinstance(mb, MultiBeam):
+        mb = MultiBeam(beams=mb, **multibeam_kwargs)
 
     if fit_trace_shift:
         mb.fit_trace_shift(**trace_shift_kwargs)
@@ -119,7 +120,7 @@ def gen_stacked_beams(
             else:
                 grouped_beam_idxs = [pa_beam_idxs]
 
-            print(grouped_beam_idxs)
+            # print(grouped_beam_idxs)
 
             for beam_idxs in grouped_beam_idxs:
 
@@ -215,10 +216,12 @@ def gen_stacked_beams(
                         translation=[-beam.beam.xoffset, -beam.beam.yoffset],
                     )
 
-                    contam_weight = np.exp(
-                        -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
-                    )
-                    grism_wht = beam.ivar * contam_weight
+                    # contam_weight = np.exp(
+                    #     -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
+                    # )
+                    contam_weight = np.ones_like(beam.ivar)
+                    # grism_wht = beam.ivar * contam_weight
+                    grism_wht = beam.ivar
                     grism_wht[~np.isfinite(grism_wht)] = 0.0
                     contam_wht = beam.ivar
                     contam_wht[~np.isfinite(contam_wht)] = 0.0

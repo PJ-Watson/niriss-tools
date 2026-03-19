@@ -34,7 +34,7 @@ from numpy.typing import ArrayLike
 from reproject import reproject_interp
 
 import niriss_tools
-from niriss_tools.grism.fitting_tools import CDNNLS
+from niriss_tools.grism.fitting_tools import CDNNLS, fnnls, fennls
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
     BagpipesSampler,
@@ -528,7 +528,7 @@ class MultiRegionFit:
                     *self.extractions_dir.glob(f"**/*{self.obj_id:0>5}.beams.fits")
                 ]
                 if len(beams_path) >= 1:
-                    beams_path = str(beams_path[0])
+                    beams_path = [str(b) for b in beams_path]
                 else:
                     raise IOError(
                         f"Original beams file does not exist in {self.extractions_dir}"
@@ -627,18 +627,18 @@ class MultiRegionFit:
 
             if memmap:
                 seg_maps = np.memmap(
-                    shared_seg_name, dtype=float, shape=seg_maps_shape, mode="r+"
+                    shared_seg_name, dtype=np.float32, shape=seg_maps_shape, mode="r+"
                 )
                 temps_arr = np.memmap(
-                    shared_models_name, dtype=float, shape=models_shape, mode="r+"
+                    shared_models_name, dtype=np.float32, shape=models_shape, mode="r+"
                 )
             else:
                 shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
                 seg_maps = np.ndarray(
-                    seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf
+                    seg_maps_shape, dtype=np.float32, buffer=shm_seg_maps.buf
                 )
                 shm_temps = shared_memory.SharedMemory(name=shared_models_name)
-                temps_arr = np.ndarray(models_shape, dtype=float, buffer=shm_temps.buf)
+                temps_arr = np.ndarray(models_shape, dtype=np.float32, buffer=shm_temps.buf)
 
             with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
                 samples2d = np.array(post_file["samples2d"])[rows]
@@ -730,19 +730,19 @@ class MultiRegionFit:
 
             if memmap:
                 seg_maps = np.memmap(
-                    shared_seg_name, dtype=float, shape=seg_maps_shape, mode="r+"
+                    shared_seg_name, dtype=np.float32, shape=seg_maps_shape, mode="r+"
                 )
                 models_arr = np.memmap(
-                    shared_models_name, dtype=float, shape=models_shape, mode="r+"
+                    shared_models_name, dtype=np.float32, shape=models_shape, mode="r+"
                 )
             else:
                 shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
                 seg_maps = np.ndarray(
-                    seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf
+                    seg_maps_shape, dtype=np.float32, buffer=shm_seg_maps.buf
                 )
                 shm_models = shared_memory.SharedMemory(name=shared_models_name)
                 models_arr = np.ndarray(
-                    models_shape, dtype=float, buffer=shm_models.buf
+                    models_shape, dtype=np.float32, buffer=shm_models.buf
                 )
 
             with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
@@ -829,15 +829,15 @@ class MultiRegionFit:
         memmap: bool = False,
     ):
         if memmap:
-            init_arr = np.memmap(shared_input, dtype=float, shape=init_shape, mode="r+")
+            init_arr = np.memmap(shared_input, dtype=np.float32, shape=init_shape, mode="r+")
             output_arr = np.memmap(
-                shared_output, dtype=float, shape=output_shape, mode="r+"
+                shared_output, dtype=np.float32, shape=output_shape, mode="r+"
             )
         else:
             shm_init = shared_memory.SharedMemory(name=shared_input)
-            init_arr = np.ndarray(init_shape, dtype=float, buffer=shm_init.buf)
+            init_arr = np.ndarray(init_shape, dtype=np.float32, buffer=shm_init.buf)
             shm_output = shared_memory.SharedMemory(name=shared_output)
-            output_arr = np.ndarray(output_shape, dtype=float, buffer=shm_output.buf)
+            output_arr = np.ndarray(output_shape, dtype=np.float32, buffer=shm_output.buf)
 
         output_arr[seg_idx, beam_idx, :, :] = block_reduce(
             init_arr == seg_id,
@@ -1008,7 +1008,7 @@ class MultiRegionFit:
         TWO_STAGE = (len(nnls_iters) > 1) | (len(nnls_tol) > 1)
 
         if spec_wavs is None:
-            spec_wavs = np.arange(10000.0, 23000.0, 45.0)
+            spec_wavs = np.arange(10000.0, 23000.0, 22.5)
 
         if memmap:
             if temp_dir is None:
@@ -1089,17 +1089,17 @@ class MultiRegionFit:
         if memmap:
             oversamp_seg_maps = np.memmap(
                 temp_dir / "memmap_oversamp_seg_maps.dat",
-                dtype=float,
+                dtype=np.float32,
                 mode="w+",
                 shape=oversamp_seg_maps_shape,
             )
         else:
             shm_seg_maps = smm.SharedMemory(
-                size=np.dtype(float).itemsize * np.prod(oversamp_seg_maps_shape)
+                size=np.dtype(np.float32).itemsize * np.prod(oversamp_seg_maps_shape)
             )
             oversamp_seg_maps = np.ndarray(
                 oversamp_seg_maps_shape,
-                dtype=float,
+                dtype=np.float32,
                 buffer=shm_seg_maps.buf,
             )
 
@@ -1116,17 +1116,17 @@ class MultiRegionFit:
         if memmap:
             oversampled = np.memmap(
                 temp_dir / "memmap_oversampled.dat",
-                dtype=float,
+                dtype=np.float32,
                 mode="w+",
                 shape=oversampled_shape,
             )
         else:
             shm_oversampled = smm.SharedMemory(
-                size=np.dtype(float).itemsize * np.prod(oversampled_shape)
+                size=np.dtype(np.float32).itemsize * np.prod(oversampled_shape)
             )
             oversampled = np.ndarray(
                 oversampled_shape,
-                dtype=float,
+                dtype=np.float32,
                 buffer=shm_oversampled.buf,
             )
         oversampled.fill(np.nan)
@@ -1135,7 +1135,9 @@ class MultiRegionFit:
         for i, (beam_cutout, cutout_shape) in enumerate(
             zip(self.MB.beams, self.MB.Nflat)
         ):
-            beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
+            beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}-{i}"
+            # print (beam_name)
+            # exit()
             if not beam_name in beam_info:
                 beam_info[beam_name] = {}
                 beam_info[beam_name]["2d_shape"] = beam_cutout.sh
@@ -1202,23 +1204,25 @@ class MultiRegionFit:
         if memmap:
             stacked_A = np.memmap(
                 temp_dir / "memmap_stacked_A.dat",
-                dtype=float,
+                dtype=np.float32,
                 mode="w+",
                 shape=stacked_A_shape,
             )
         else:
             shm_stacked_A = smm.SharedMemory(
-                size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
+                size=np.dtype(np.float32).itemsize * np.prod(stacked_A_shape)
             )
             stacked_A = np.ndarray(
                 stacked_A_shape,
-                dtype=float,
+                dtype=np.float32,
                 buffer=shm_stacked_A.buf,
             )
 
         print(f"{memmap=}")
 
         stacked_A.fill(0.0)
+        print (stacked_A_shape)
+        print (len(beam_info))
 
         # Offset for background
         if fit_background:
@@ -1321,9 +1325,11 @@ class MultiRegionFit:
         ]
 
         # Construct a zero-length table if it doesn't already exist
-        if self.output_table_path.is_file() and not overwrite:
+        # if self.output_table_path.is_file() and not overwrite:
+        try:
             output_table = Table.read(self.output_table_path, format="ascii.ecsv")
-        else:
+            assert np.logical_not(overwrite)
+        except:
             output_table = Table(
                 [
                     *np.zeros((5, 1)),
@@ -1479,14 +1485,16 @@ class MultiRegionFit:
                 y = stacked_scif[stacked_fit_mask] + off
                 y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
 
+                y = y.astype(np.float32)
+
                 # Three different methods of fitting, each with different call
                 # signatures and return values
                 if nnls_method == "adelie" and HAS_ADELIE:
                     state = adelie.solver.bvls(
                         stacked_Ax,
                         y + off,
-                        lower=np.zeros(stacked_Ax.shape[-1]),
-                        upper=np.full(stacked_Ax.shape[-1], np.inf),
+                        lower=np.zeros(stacked_Ax.shape[-1], dtype=np.float32),
+                        upper=np.full(stacked_Ax.shape[-1], np.inf,  dtype=np.float32),
                         max_iters=_nnls_i,
                         tol=_nnls_t,
                         n_threads=1,  # Inter-thread communication is actually slower
@@ -1504,7 +1512,21 @@ class MultiRegionFit:
                     coeffs = nnls_solver.w
                     coeffs[:num_stacks] -= off
 
-                # elif nnls_method == "scipy":
+                elif nnls_method == "fnnls":
+                    coeffs = fnnls(
+                        stacked_Ax, y + off,
+                        # tolerance=_nnls_t,
+                        # max_iterations=_nnls_i,
+                    )
+                    coeffs[:num_stacks] -= off
+
+                elif nnls_method == "fennls":
+                    coeffs = fennls(
+                        stacked_Ax, y + off,
+                        tolerance=_nnls_t,
+                        max_iterations=_nnls_i,
+                    )
+                    coeffs[:num_stacks] -= off
                 else:
 
                     coeffs, rnorm, info = scipy.optimize._nnls._nnls(
@@ -1739,18 +1761,18 @@ class MultiRegionFit:
             if memmap:
                 flat_beam_models = np.memmap(
                     temp_dir / "memmap_beams_model.dat",
-                    dtype=float,
+                    dtype=np.float32,
                     mode="w+",
                     shape=(beam_models_len),
                 )
             else:
 
                 shm_beam_models = smm.SharedMemory(
-                    size=np.dtype(float).itemsize * beam_models_len
+                    size=np.dtype(np.float32).itemsize * beam_models_len
                 )
                 flat_beam_models = np.ndarray(
                     (beam_models_len),
-                    dtype=float,
+                    dtype=np.float32,
                     buffer=shm_beam_models.buf,
                 )
 

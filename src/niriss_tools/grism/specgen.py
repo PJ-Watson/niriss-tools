@@ -22,6 +22,7 @@ from bagpipes.models.igm_model import igm
 from bagpipes.models.nebular_model import nebular
 from bagpipes.models.stellar_model import stellar
 from numpy.typing import ArrayLike
+from grizli.utils_numba.interp import interp_conserve_c
 
 __all__ = [
     "ExtendedModelGalaxy",
@@ -778,8 +779,11 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         #                    spectrum, left=0, right=0)
 
         vac_redshifted_wavs = self.air_to_vac(redshifted_wavs)
-        fluxes = spectres.spectres(
-            self.spec_wavs, vac_redshifted_wavs, spectrum, fill=0
+        # fluxes = spectres.spectres(
+        #     self.spec_wavs, vac_redshifted_wavs, spectrum, fill=0
+        # )
+        fluxes = interp_conserve_c(
+            self.spec_wavs, vac_redshifted_wavs, spectrum
         )
 
         if self.spec_units == "mujy":

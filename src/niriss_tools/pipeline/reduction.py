@@ -242,7 +242,6 @@ def load_assoc(
     import shutil
 
     from grizli import utils
-    from grizli.aws import visit_processor
 
     QUERY_URL = (
         "https://grizli-cutout.herokuapp.com/assoc"
