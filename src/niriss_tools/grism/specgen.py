@@ -23,6 +23,14 @@ from bagpipes.models.nebular_model import nebular
 from bagpipes.models.stellar_model import stellar
 from numpy.typing import ArrayLike
 from grizli.utils_numba.interp import interp_conserve_c
+from pathlib import Path
+from tqdm import tqdm
+
+
+from functools import partial
+
+from multiprocessing import Pool
+import h5py
 
 __all__ = [
     "ExtendedModelGalaxy",
@@ -782,9 +790,7 @@ class ExtendedModelGalaxy(BagpipesModelGalaxy):
         # fluxes = spectres.spectres(
         #     self.spec_wavs, vac_redshifted_wavs, spectrum, fill=0
         # )
-        fluxes = interp_conserve_c(
-            self.spec_wavs, vac_redshifted_wavs, spectrum
-        )
+        fluxes = interp_conserve_c(self.spec_wavs, vac_redshifted_wavs, spectrum)
 
         if self.spec_units == "mujy":
             fluxes /= 10**-29 * 2.9979 * 10**18 / self.spec_wavs**2
@@ -1035,3 +1041,119 @@ class BagpipesSampler(object):
             return self.model_gal.spectrum.T, line_flux
         else:
             return self.model_gal.spectrum.T
+
+
+def _init_spec_sampler(fit_instructions, veldisp):
+    global spec_sampler
+    spec_sampler = BagpipesSampler(fit_instructions=fit_instructions, veldisp=veldisp)
+
+
+def create_spec_file(
+    post_id: str,
+    posterior_dir: Path | None = None,
+    spec_dir: Path | None = None,
+    spec_wavs: ArrayLike | None = None,
+) -> None:
+    """
+    Generated resampled spectra from a bagpipes posterior output.
+
+    Parameters
+    ----------
+    post_id : str
+        The ID of the posterior ``"*.h5"`` file.
+    posterior_dir : Path | None, optional
+        The directory containing the posterior file, by default ``None``.
+    spec_dir : Path | None, optional
+        The directory containing the spectral file, by default ``None``.
+    spec_wavs : ArrayLike | None, optional
+        The wavelengths onto which the spectrum will be resampled, by 
+        default ``None``.
+    """
+    
+    with h5py.File(posterior_dir / f"{post_id}.h5", "r") as post_file:
+        samples2d = np.array(post_file["samples2d"])
+
+    with h5py.File(spec_dir / f"{post_id}.h5", "w") as spec_file:
+        spec_file.create_dataset("spec_wavs", data=spec_wavs)
+
+        spec_data = np.zeros((samples2d.shape[0], spec_wavs.shape[0]))
+        for s_i, param_vector in enumerate(samples2d):
+            spec_data[s_i] = spec_sampler.sample(
+                param_vector,
+                spec_wavs=spec_wavs,
+            )[1]
+        spec_file.create_dataset("spec_data", data=spec_data)
+
+def pre_gen_spec(
+    pipes_dir: Path,
+    fit_instructions: dict,
+    spec_wavs: ArrayLike,
+    veldisp: float = 500,
+    run: str = "",
+    cpu_count: int | None = None,
+) -> None:
+    """
+    Generate resampled spectra for all posterior samples.
+
+    Parameters
+    ----------
+    pipes_dir : Path
+        The main bagpipes directory.
+    fit_instructions : dict
+        A dictionary containing the details of the model, as well as any
+        constraints and priors on the parameters.
+    spec_wavs : `ArrayLike`
+        An array of wavelengths at which spectral fluxes should be
+        returned.
+    veldisp : float, optional
+        The velocity dispersion of the model galaxy in km/s. By default
+        ``veldisp=500``.
+    run : str, optional
+        The subfolder into which outputs will be saved, useful e.g.
+        for fitting more than one model configuration to the same
+        data, by default ``""``.
+    cpu_count : int, optional
+        The number of processes to use when generating the spectra. If
+        ``None`` (default), this will run on the number of
+        cores returned by  `multiprocessing.cpu_count`.
+    """
+
+    posterior_dir = pipes_dir / "posterior" / run
+
+    spec_dir = pipes_dir / "spec" / run
+    spec_dir.mkdir(exist_ok=True, parents=True)
+
+    post_ids = [
+        f.stem for f in posterior_dir.glob("*.h5") if not (spec_dir / f.name).is_file()
+    ]
+
+    # Generate the spectra
+    print("Generating resampled spectra...")
+    pbar = tqdm(total=len(post_ids))
+
+    def _update(*a):
+        pbar.update()
+
+    with Pool(
+        processes=cpu_count,
+        initializer=_init_spec_sampler,
+        initargs=(
+            fit_instructions,
+            veldisp,
+        ),
+    ) as pool:
+        for p_i, p in enumerate(post_ids):
+            pool.apply_async(
+                create_spec_file,
+                (p,),
+                kwds=dict(
+                    posterior_dir=posterior_dir,
+                    spec_dir=spec_dir,
+                    spec_wavs=spec_wavs,
+                ),
+                error_callback=print,
+                callback=_update,
+            )
+        pool.close()
+        pool.join()
+        pbar.close()

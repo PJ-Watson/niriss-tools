@@ -40,6 +40,7 @@ from niriss_tools.grism.specgen import (
     BagpipesSampler,
     ExtendedModelGalaxy,
     check_coverage,
+    pre_gen_spec
 )
 from niriss_tools.grism.utils import align_direct_images, gen_stacked_beams
 from niriss_tools.pipeline.reduction import recursive_merge
@@ -1308,6 +1309,14 @@ class MultiRegionFit:
             memmap=memmap,
             n_shifted_rows=n_shifted_samples,
         )
+
+        pre_gen_spec(self.pipes_dir, fit_instructions, spec_wavs=spec_wavs,
+         veldisp = veldisp, run = self.run_name, cpu_count=cpu_count,)
+        # print (len(spec_wavs))
+        # import sys
+        # print (sys.getsizeof(spec_wavs))
+
+        exit()
 
         # These column names should be fixed for all objects
         init_col_names = [
