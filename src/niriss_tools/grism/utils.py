@@ -149,8 +149,6 @@ def gen_stacked_beams(
             else:
                 grouped_beam_idxs = [pa_beam_idxs]
 
-            # print(grouped_beam_idxs)
-
             for beam_idxs in grouped_beam_idxs:
 
                 # As a reference beam, we use the one with the smallest shift from the centre
