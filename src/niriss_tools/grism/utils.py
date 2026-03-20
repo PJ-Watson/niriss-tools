@@ -16,7 +16,36 @@ from grizli.model import BeamCutout, GrismDisperser
 from grizli.multifit import MultiBeam
 from tqdm import tqdm
 
-__all__ = ["gen_stacked_beams", "align_direct_images"]
+__all__ = ["gen_stacked_beams", "align_direct_images", "log_with_offset", "LINE_UP", "LINE_CLEAR"]
+
+LINE_UP = '\033[1A'
+LINE_CLEAR = '\x1b[2K'
+
+def log_with_offset(s: str, blank_lines: int = 1, curr_line: str = "") -> None:
+    """
+    Print to previous lines on the console.
+
+    Parameters
+    ----------
+    s : str
+        The string to print.
+    blank_lines : int, optional
+        How many blank lines to leave between the current one and the
+        previous, by default ``1``.
+    curr_line : str, optional
+        The string to print to the current line, by default ``""``.
+    """
+
+    print(
+        (blank_lines + 1) * LINE_UP
+        + LINE_CLEAR
+        + s
+        + (blank_lines + 1) * ("\n" + LINE_CLEAR)
+        + curr_line,
+        flush=True,
+    )
+
+    return
 
 
 def gen_stacked_beams(
@@ -82,8 +111,9 @@ def gen_stacked_beams(
         The stacked multibeam object.
     """
 
-    if type(mb) is str:
-        mb = MultiBeam(beams=str(mb), **multibeam_kwargs)
+    # if type(mb) is str:
+    if not isinstance(mb, MultiBeam):
+        mb = MultiBeam(beams=mb, **multibeam_kwargs)
 
     if fit_trace_shift:
         mb.fit_trace_shift(**trace_shift_kwargs)
@@ -118,8 +148,6 @@ def gen_stacked_beams(
 
             else:
                 grouped_beam_idxs = [pa_beam_idxs]
-
-            print(grouped_beam_idxs)
 
             for beam_idxs in grouped_beam_idxs:
 
@@ -215,10 +243,12 @@ def gen_stacked_beams(
                         translation=[-beam.beam.xoffset, -beam.beam.yoffset],
                     )
 
-                    contam_weight = np.exp(
-                        -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
-                    )
-                    grism_wht = beam.ivar * contam_weight
+                    # contam_weight = np.exp(
+                    #     -(mb.fcontam * np.abs(beam.contam) * np.sqrt(beam.ivar))
+                    # )
+                    contam_weight = np.ones_like(beam.ivar)
+                    # grism_wht = beam.ivar * contam_weight
+                    grism_wht = beam.ivar
                     grism_wht[~np.isfinite(grism_wht)] = 0.0
                     contam_wht = beam.ivar
                     contam_wht[~np.isfinite(contam_wht)] = 0.0

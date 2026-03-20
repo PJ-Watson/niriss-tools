@@ -34,14 +34,20 @@ from numpy.typing import ArrayLike
 from reproject import reproject_interp
 
 import niriss_tools
-from niriss_tools.grism.fitting_tools import CDNNLS
+from niriss_tools.grism.fitting_tools import CDNNLS, fnnls, fennls
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
     BagpipesSampler,
     ExtendedModelGalaxy,
     check_coverage,
+    pre_gen_spec,
 )
-from niriss_tools.grism.utils import align_direct_images, gen_stacked_beams
+from niriss_tools.grism.utils import (
+    align_direct_images,
+    gen_stacked_beams,
+    log_with_offset,
+    LINE_UP,
+)
 from niriss_tools.pipeline.reduction import recursive_merge
 from niriss_tools.sed.binning import bin_and_save
 
@@ -58,11 +64,15 @@ DEFAULT_PLINE = {
 }
 
 
+def _init_beams(beams):
+    global beams_object
+    beams_object = deepcopy(beams)
+
+
 def _init_pipes_sampler(fit_instructions, veldisp, beams, lock_value=None):
     global pipes_sampler
     pipes_sampler = BagpipesSampler(fit_instructions=fit_instructions, veldisp=veldisp)
-    global beams_object
-    beams_object = deepcopy(beams)
+    _init_beams(beams)
     global lock_var
     lock_var = lock_value
 
@@ -242,6 +252,7 @@ class MultiRegionFit:
             "nnls_tol": config["grism"].get("nnls_tol", 1e-5),
             "n_shifted": config["grism"].get("n_shifted", 2),
             "n_shifted_samples": config["grism"].get("n_shifted_samples", 1),
+            "cache_spec": config["grism"].get("cache_spec", True),
         }
 
     def fit_atlas(
@@ -520,37 +531,43 @@ class MultiRegionFit:
         )
         binned_data_path = binned_data_dir / f"{binned_name}_data.fits"
 
-        if not (binned_data_path.is_file() and new_beam_loc.is_file()):
+        if not binned_data_path.is_file():
+            try:
+                multib = MultiBeam(
+                    str(new_beam_loc),
+                    **multibeam_kwargs,
+                )
+            except:
 
-            if beams_path is None:
+                if beams_path is None:
 
-                beams_path = [
-                    *self.extractions_dir.glob(f"**/*{self.obj_id:0>5}.beams.fits")
-                ]
-                if len(beams_path) >= 1:
-                    beams_path = str(beams_path[0])
+                    beams_path = [
+                        *self.extractions_dir.glob(f"**/*{self.obj_id:0>5}.beams.fits")
+                    ]
+                    if len(beams_path) >= 1:
+                        beams_path = [str(b) for b in beams_path]
+                    else:
+                        raise IOError(
+                            f"Original beams file does not exist in {self.extractions_dir}"
+                        )
+
+                if multibeam_kwargs is None:
+                    multibeam_kwargs = self.multibeam_kwargs
+
+                if use_stacks:
+                    multib = gen_stacked_beams(
+                        beams_path,
+                        **multibeam_kwargs,
+                    )
                 else:
-                    raise IOError(
-                        f"Original beams file does not exist in {self.extractions_dir}"
+                    multib = MultiBeam(
+                        beams_path,
+                        **multibeam_kwargs,
                     )
 
-            if multibeam_kwargs is None:
-                multibeam_kwargs = self.multibeam_kwargs
-
-            if use_stacks:
-                multib = gen_stacked_beams(
-                    beams_path,
-                    **multibeam_kwargs,
-                )
-            else:
-                multib = MultiBeam(
-                    beams_path,
-                    **multibeam_kwargs,
-                )
-
-            # Write the realigned and (stacked?) beam to a file
-            beam_hdul = multib.write_master_fits(get_hdu=True)
-            beam_hdul.writeto(new_beam_loc, overwrite=True)
+                # Write the realigned and (stacked?) beam to a file
+                beam_hdul = multib.write_master_fits(get_hdu=True)
+                beam_hdul.writeto(new_beam_loc, overwrite=True)
 
             # Align all images to the new beam
             aligned_info_dict = align_direct_images(
@@ -610,6 +627,7 @@ class MultiRegionFit:
         shared_models_name=None,
         models_shape=None,
         posterior_dir=None,
+        spectral_dir=None,
         n_samples=None,
         spec_wavs=None,
         beam_info=None,
@@ -627,47 +645,82 @@ class MultiRegionFit:
 
             if memmap:
                 seg_maps = np.memmap(
-                    shared_seg_name, dtype=float, shape=seg_maps_shape, mode="r+"
+                    shared_seg_name, dtype=np.float32, shape=seg_maps_shape, mode="r+"
                 )
                 temps_arr = np.memmap(
-                    shared_models_name, dtype=float, shape=models_shape, mode="r+"
+                    shared_models_name, dtype=np.float32, shape=models_shape, mode="r+"
                 )
             else:
                 shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
                 seg_maps = np.ndarray(
-                    seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf
+                    seg_maps_shape, dtype=np.float32, buffer=shm_seg_maps.buf
                 )
                 shm_temps = shared_memory.SharedMemory(name=shared_models_name)
-                temps_arr = np.ndarray(models_shape, dtype=float, buffer=shm_temps.buf)
-
-            with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-                samples2d = np.array(post_file["samples2d"])[rows]
-
-            # Just make one set of posterior samples from all possible seg ids
-            if (id_shifts is not None) and (len(id_shifts) > 0):
-                for s in id_shifts:
-                    shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
-                    with h5py.File(
-                        Path(posterior_dir) / f"{shifted_id}.h5", "r"
-                    ) as post_file:
-                        samples2d = np.concatenate(
-                            (
-                                samples2d,
-                                np.array(post_file["samples2d"])[
-                                    rows[:n_shifted_rows]
-                                ].reshape(n_shifted_rows, -1),
-                            ),
-                            axis=0,
-                        )
-
-            for sample_i, sample in enumerate(samples2d):
-
-                temp_resamp_1d = pipes_sampler.sample(
-                    sample,
-                    spec_wavs=spec_wavs,
-                    cont_only=cont_only,
-                    rm_line=rm_line,
+                temps_arr = np.ndarray(
+                    models_shape, dtype=np.float32, buffer=shm_temps.buf
                 )
+
+            if spectral_dir is not None:
+
+                temps_resampled = np.zeros(
+                    (len(rows) + len(id_shifts) * n_shifted_rows, spec_wavs.shape[0])
+                )
+                with h5py.File(
+                    Path(spectral_dir) / f"{seg_id}.h5",
+                    "r",
+                ) as spec_file:
+                    temps_resampled[: len(rows), :] = np.array(spec_file["spec_data"])[
+                        rows
+                    ]
+
+                # Just make one set of templates from all possible seg ids
+                if (id_shifts is not None) and (len(id_shifts) > 0):
+                    for s_i, s in enumerate(id_shifts):
+                        shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
+                        with h5py.File(
+                            Path(spectral_dir) / f"{shifted_id}.h5",
+                            "r",
+                        ) as spec_file:
+                            temps_resampled[
+                                int(len(rows) + s_i * n_shifted_rows) : int(
+                                    len(rows) + (s_i + 1) * n_shifted_rows
+                                ) :
+                            ] = np.array(spec_file["spec_data"])[rows[:n_shifted_rows]]
+
+            else:
+                with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
+                    samples2d = np.array(post_file["samples2d"])[rows]
+
+                # Just make one set of posterior samples from all possible seg ids
+                if (id_shifts is not None) and (len(id_shifts) > 0):
+                    for s in id_shifts:
+                        shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
+                        with h5py.File(
+                            Path(posterior_dir) / f"{shifted_id}.h5", "r"
+                        ) as post_file:
+                            samples2d = np.concatenate(
+                                (
+                                    samples2d,
+                                    np.array(post_file["samples2d"])[
+                                        rows[:n_shifted_rows]
+                                    ].reshape(n_shifted_rows, -1),
+                                ),
+                                axis=0,
+                            )
+
+                temps_resampled = np.zeros((samples2d.shape[0], spec_wavs.shape[0]))
+                for sample_i, sample in enumerate(samples2d):
+
+                    temps_resampled[sample_i] = pipes_sampler.sample(
+                        sample,
+                        spec_wavs=spec_wavs,
+                        cont_only=cont_only,
+                        rm_line=rm_line,
+                    )[1]
+
+            for sample_i, temp_spec in enumerate(temps_resampled):
+
+                temp_resamp_1d = np.c_[spec_wavs, temp_spec].T
 
                 i0 = 0
                 for k_i, (k, v) in enumerate(beam_info.items()):
@@ -730,19 +783,19 @@ class MultiRegionFit:
 
             if memmap:
                 seg_maps = np.memmap(
-                    shared_seg_name, dtype=float, shape=seg_maps_shape, mode="r+"
+                    shared_seg_name, dtype=np.float32, shape=seg_maps_shape, mode="r+"
                 )
                 models_arr = np.memmap(
-                    shared_models_name, dtype=float, shape=models_shape, mode="r+"
+                    shared_models_name, dtype=np.float32, shape=models_shape, mode="r+"
                 )
             else:
                 shm_seg_maps = shared_memory.SharedMemory(name=shared_seg_name)
                 seg_maps = np.ndarray(
-                    seg_maps_shape, dtype=float, buffer=shm_seg_maps.buf
+                    seg_maps_shape, dtype=np.float32, buffer=shm_seg_maps.buf
                 )
                 shm_models = shared_memory.SharedMemory(name=shared_models_name)
                 models_arr = np.ndarray(
-                    models_shape, dtype=float, buffer=shm_models.buf
+                    models_shape, dtype=np.float32, buffer=shm_models.buf
                 )
 
             with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
@@ -829,15 +882,19 @@ class MultiRegionFit:
         memmap: bool = False,
     ):
         if memmap:
-            init_arr = np.memmap(shared_input, dtype=float, shape=init_shape, mode="r+")
+            init_arr = np.memmap(
+                shared_input, dtype=np.float32, shape=init_shape, mode="r+"
+            )
             output_arr = np.memmap(
-                shared_output, dtype=float, shape=output_shape, mode="r+"
+                shared_output, dtype=np.float32, shape=output_shape, mode="r+"
             )
         else:
             shm_init = shared_memory.SharedMemory(name=shared_input)
-            init_arr = np.ndarray(init_shape, dtype=float, buffer=shm_init.buf)
+            init_arr = np.ndarray(init_shape, dtype=np.float32, buffer=shm_init.buf)
             shm_output = shared_memory.SharedMemory(name=shared_output)
-            output_arr = np.ndarray(output_shape, dtype=float, buffer=shm_output.buf)
+            output_arr = np.ndarray(
+                output_shape, dtype=np.float32, buffer=shm_output.buf
+            )
 
         output_arr[seg_idx, beam_idx, :, :] = block_reduce(
             init_arr == seg_id,
@@ -874,6 +931,7 @@ class MultiRegionFit:
         nnls_tol: float = 1e-5,
         n_shifted: int = 2,
         n_shifted_samples: int = 1,
+        cache_spec: bool = True,
     ):
         """
         Fit the object at a specified redshift.
@@ -987,6 +1045,10 @@ class MultiRegionFit:
             additional regions (i.e. the total number of samples is given
             by ``n_samples + n_shifted * n_shifted_samples``). By default,
             only 1 sample is drawn from each extra region.
+        cache_spec : bool, optional
+            Pre-generate the spectra before forward modelling. Can give a
+            large speedup if running for many iterations, at the cost of
+            additional disk space.
 
         Returns
         -------
@@ -1008,7 +1070,7 @@ class MultiRegionFit:
         TWO_STAGE = (len(nnls_iters) > 1) | (len(nnls_tol) > 1)
 
         if spec_wavs is None:
-            spec_wavs = np.arange(10000.0, 23000.0, 45.0)
+            spec_wavs = np.arange(10000.0, 23000.0, 22.5)
 
         if memmap:
             if temp_dir is None:
@@ -1089,17 +1151,17 @@ class MultiRegionFit:
         if memmap:
             oversamp_seg_maps = np.memmap(
                 temp_dir / "memmap_oversamp_seg_maps.dat",
-                dtype=float,
+                dtype=np.float32,
                 mode="w+",
                 shape=oversamp_seg_maps_shape,
             )
         else:
             shm_seg_maps = smm.SharedMemory(
-                size=np.dtype(float).itemsize * np.prod(oversamp_seg_maps_shape)
+                size=np.dtype(np.float32).itemsize * np.prod(oversamp_seg_maps_shape)
             )
             oversamp_seg_maps = np.ndarray(
                 oversamp_seg_maps_shape,
-                dtype=float,
+                dtype=np.float32,
                 buffer=shm_seg_maps.buf,
             )
 
@@ -1116,17 +1178,17 @@ class MultiRegionFit:
         if memmap:
             oversampled = np.memmap(
                 temp_dir / "memmap_oversampled.dat",
-                dtype=float,
+                dtype=np.float32,
                 mode="w+",
                 shape=oversampled_shape,
             )
         else:
             shm_oversampled = smm.SharedMemory(
-                size=np.dtype(float).itemsize * np.prod(oversampled_shape)
+                size=np.dtype(np.float32).itemsize * np.prod(oversampled_shape)
             )
             oversampled = np.ndarray(
                 oversampled_shape,
-                dtype=float,
+                dtype=np.float32,
                 buffer=shm_oversampled.buf,
             )
         oversampled.fill(np.nan)
@@ -1135,7 +1197,7 @@ class MultiRegionFit:
         for i, (beam_cutout, cutout_shape) in enumerate(
             zip(self.MB.beams, self.MB.Nflat)
         ):
-            beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}"
+            beam_name = f"{beam_cutout.grism.pupil}-{beam_cutout.grism.filter}-{i}"
             if not beam_name in beam_info:
                 beam_info[beam_name] = {}
                 beam_info[beam_name]["2d_shape"] = beam_cutout.sh
@@ -1199,32 +1261,26 @@ class MultiRegionFit:
         # and flattened.
         stacked_A_shape = (temp_offset + NTEMP, stacked_shape)
 
+        print(f"{memmap=}\n\n")
+
         if memmap:
             stacked_A = np.memmap(
                 temp_dir / "memmap_stacked_A.dat",
-                dtype=float,
+                dtype=np.float32,
                 mode="w+",
                 shape=stacked_A_shape,
             )
         else:
             shm_stacked_A = smm.SharedMemory(
-                size=np.dtype(float).itemsize * np.prod(stacked_A_shape)
+                size=np.dtype(np.float32).itemsize * np.prod(stacked_A_shape)
             )
             stacked_A = np.ndarray(
                 stacked_A_shape,
-                dtype=float,
+                dtype=np.float32,
                 buffer=shm_stacked_A.buf,
             )
 
-        print(f"{memmap=}")
-
         stacked_A.fill(0.0)
-
-        # Offset for background
-        if fit_background:
-            off = 0.04
-        else:
-            off = 0.0
 
         # There are very few scenarios in which it makes sense to use the
         # individual beams for fitting. The computational requirements are
@@ -1274,6 +1330,19 @@ class MultiRegionFit:
         stacked_fit_mask &= np.isfinite(stacked_scif)
         DoF = int((stacked_weightf * stacked_fit_mask).sum())
 
+        # Allow for background fitting by including an offset
+        if fit_background:
+            pedestal = 0.04
+        else:
+            pedestal = 0.0
+
+        y = stacked_scif[stacked_fit_mask] + pedestal
+        y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
+
+        y = y.astype(np.float32)
+
+        stacked_sivarf_masked = np.sqrt(stacked_ivarf[stacked_fit_mask])
+
         # TODO: make the output name a parameter?
         self.output_table_path = multireg_out_dir / (
             f"{self.obj_id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
@@ -1305,6 +1374,31 @@ class MultiRegionFit:
             n_shifted_rows=n_shifted_samples,
         )
 
+        if cache_spec:
+            pre_gen_spec(
+                self.pipes_dir,
+                fit_instructions,
+                spec_wavs=spec_wavs,
+                veldisp=veldisp,
+                run=self.run_name,
+                cpu_count=cpu_count,
+            )
+            pool_kwargs = dict(
+                processes=cpu_count,
+                initializer=_init_beams,
+                initargs=(self.MB.beams,),
+            )
+        else:
+            pool_kwargs = dict(
+                processes=cpu_count,
+                initializer=_init_pipes_sampler,
+                initargs=(
+                    fit_instructions,
+                    veldisp,
+                    self.MB.beams,
+                ),
+            )
+
         # These column names should be fixed for all objects
         init_col_names = [
             "iteration",
@@ -1320,19 +1414,28 @@ class MultiRegionFit:
             "unique_temp",
         ]
 
-        # Construct a zero-length table if it doesn't already exist
-        if self.output_table_path.is_file() and not overwrite:
+        total_iters = n_iters + int(TWO_STAGE)
+
+        # Construct the table if it doesn't already exist
+        try:
             output_table = Table.read(self.output_table_path, format="ascii.ecsv")
-        else:
+            assert np.logical_not(overwrite)
+        except:
             output_table = Table(
                 [
-                    *np.zeros((5, 1)),
-                    np.zeros((1, n_samples), dtype=int),
-                    np.zeros((1, n_shifted), dtype=int),
-                    *np.zeros((4, 1)),
-                    *np.zeros((temp_offset, 1)),
+                    np.zeros(total_iters),
+                    np.full(total_iters, np.nan),
+                    *np.zeros((3, total_iters)),
+                    np.zeros((total_iters, n_samples), dtype=int),
+                    np.zeros((total_iters, n_shifted), dtype=int),
+                    *np.zeros((4, total_iters)),
+                    *np.zeros((temp_offset, total_iters)),
                     *np.zeros(
-                        (self.n_regions, 1, n_samples + (n_shifted * n_shifted_samples))
+                        (
+                            self.n_regions,
+                            total_iters,
+                            n_samples + (n_shifted * n_shifted_samples),
+                        )
                     ),
                 ],
                 names=init_col_names
@@ -1342,7 +1445,6 @@ class MultiRegionFit:
                 + [float] * temp_offset
                 + [float] * self.n_regions,
             )
-            output_table = output_table[:0]
 
         # Check if seed was previously set, write to table if not
         seed = output_table.meta.get("RNGSEED", [seed])[0]
@@ -1359,12 +1461,15 @@ class MultiRegionFit:
         rng_shifts = np.random.default_rng(seed=seed)
 
         # Check if the table length matches the expected number of iterations
-        prev_iters = len(output_table)
-        if prev_iters < n_iters + int(TWO_STAGE):
+        n_prev_iters = np.max(
+            (output_table["iteration"] + 1)[np.isfinite(output_table["chi2"])],
+            initial=0,
+        )
+        if n_prev_iters < total_iters:
 
             # If there are previous iterations, sample from the RNGs so the
             # seed order is preserved
-            for x in np.arange(prev_iters):
+            for x in np.arange(n_prev_iters):
                 rows = rng.choice(
                     np.arange(n_post_samples, dtype=int),
                     size=n_samples,
@@ -1376,15 +1481,23 @@ class MultiRegionFit:
                     replace=False if n_shifted <= self.n_regions else True,
                 )
 
-            remaining_iters = n_iters + int(TWO_STAGE) - prev_iters
+            remaining_iters = total_iters - n_prev_iters
 
             output_table.write(
                 self.output_table_path, overwrite=True, format="ascii.ecsv"
             )
 
-            iterations = np.arange(prev_iters, n_iters + int(TWO_STAGE))
+            iterations = np.arange(n_prev_iters, total_iters)
 
             for iteration in iterations:
+                try:
+                    curr_line = (
+                        f"Minimum chi2: {np.nanmin(output_table["chi2"]):.3f}"
+                        f"\t\t(Iteration {np.nanargmin(output_table["chi2"])})"
+                    )
+                except:
+                    curr_line = "Minimum chi2: ---"
+                log_with_offset("", curr_line=curr_line)
 
                 # On the final iteration, reuse the samples from the current
                 # best-fit solution
@@ -1406,31 +1519,37 @@ class MultiRegionFit:
                         replace=False if n_shifted <= self.n_regions else True,
                     )
 
-                print(f"Iteration {iteration}, {rows=}")
+                log_with_offset(f"Iteration {iteration}, {rows=}", curr_line=curr_line)
                 t0 = time()
 
                 # Generate the forward-modelled spectra
-                print("Generating models...")
-                with multiprocessing.Pool(
-                    processes=cpu_count,
-                    initializer=_init_pipes_sampler,
-                    initargs=(
-                        fit_instructions,
-                        veldisp,
-                        self.MB.beams,
-                    ),
-                ) as pool:
+                log_with_offset(f"Generating models...", curr_line=curr_line)
+                with multiprocessing.Pool(**pool_kwargs) as pool:
                     for s_i, s in enumerate(self.regions_seg_ids):
                         pool.apply_async(
                             stacked_fn,
                             (s_i, s),
-                            kwds={"rows": rows, "id_shifts": id_shifts},
+                            kwds={
+                                "rows": rows,
+                                "id_shifts": id_shifts,
+                                "spectral_dir": (
+                                    str(self.pipes_dir / "spec" / self.run_name)
+                                    if cache_spec
+                                    else None
+                                ),
+                            },
+                            error_callback=print,
                         )
                     pool.close()
                     pool.join()
 
                 t1 = time()
-                print(f"Generating models... DONE {t1-t0:.3f}s")
+                # print("\r" + f"Generating models... DONE {t1-t0:.3f}s", flush=True)
+
+                log_with_offset(
+                    LINE_UP + f"Generating models...    DONE in {t1-t0:.3f}s",
+                    curr_line=curr_line,
+                )
 
                 # Remove any negative or zero templates
                 ok_temp = np.sum(stacked_A, axis=1) > 0
@@ -1438,8 +1557,8 @@ class MultiRegionFit:
                 # We need to remove duplicate templates so the NNLS solvers can
                 # actually converge. Until such time as np.unique implements
                 # a hash map to allow for speeding up `return_index`, we just
-                # skip over every 99 pixels
-                stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::99])
+                # skip over every 199 pixels
+                stacked_A_contig = np.ascontiguousarray(stacked_A[:, ::199])
                 # np.unique() finds identical items in a raveled array. To make it
                 # see each row as a single item, we create a view of each row as a
                 # byte string of length itemsize times number of columns in `ar`
@@ -1456,37 +1575,32 @@ class MultiRegionFit:
                 out_coeffs = np.zeros(stacked_A.shape[0])
 
                 # Transpose the template array
-                stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
+                # stacked_Ax = stacked_A[:, stacked_fit_mask][ok_temp, :].T
+                stacked_Ax = stacked_A[np.ix_(ok_temp, stacked_fit_mask)].T
 
-                stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
-                print(
-                    f"Array size reduced from {stacked_A.shape} to "
-                    f"{stacked_Ax.shape[::-1]} ("
-                    f"{np.prod(stacked_Ax.shape)/np.prod(stacked_A.shape):.1%} of original)"
-                )
-                print("NNLS fitting...")
+                # stacked_Ax *= np.sqrt(stacked_ivarf[stacked_fit_mask][:, np.newaxis])
+                stacked_Ax *= stacked_sivarf_masked[:, np.newaxis]
 
                 # Change the max iters and tolerance for the final iteration
                 if TWO_STAGE and (iteration == iterations[-1]):
-                    print("Final iteration")
+                    log_with_offset("Final iteration", curr_line=curr_line)
                     _nnls_i = nnls_iters[1]
                     _nnls_t = nnls_tol[1]
                 else:
                     _nnls_i = nnls_iters[0]
                     _nnls_t = nnls_tol[0]
 
-                # Allow for background fitting by including an offset
-                y = stacked_scif[stacked_fit_mask] + off
-                y *= np.sqrt(stacked_ivarf[stacked_fit_mask])
+                # print("NNLS fitting...", end="")
+                log_with_offset("NNLS fitting...         ", curr_line=curr_line)
 
                 # Three different methods of fitting, each with different call
                 # signatures and return values
                 if nnls_method == "adelie" and HAS_ADELIE:
                     state = adelie.solver.bvls(
                         stacked_Ax,
-                        y + off,
-                        lower=np.zeros(stacked_Ax.shape[-1]),
-                        upper=np.full(stacked_Ax.shape[-1], np.inf),
+                        y,
+                        lower=np.zeros(stacked_Ax.shape[-1], dtype=np.float32),
+                        upper=np.full(stacked_Ax.shape[-1], np.inf, dtype=np.float32),
                         max_iters=_nnls_i,
                         tol=_nnls_t,
                         n_threads=1,  # Inter-thread communication is actually slower
@@ -1494,26 +1608,46 @@ class MultiRegionFit:
                     state.solve()
                     state_iters = deepcopy(state.iters)
                     coeffs = deepcopy(state.beta)
-                    coeffs[:num_stacks] -= off
+                    coeffs[:num_stacks] -= pedestal
                     del state
 
                 elif nnls_method == "numba":
 
-                    nnls_solver = CDNNLS(stacked_Ax, y + off)
+                    nnls_solver = CDNNLS(stacked_Ax, y)
                     nnls_solver.run(n_iter=_nnls_i, epsilon=_nnls_t)
                     coeffs = nnls_solver.w
-                    coeffs[:num_stacks] -= off
+                    coeffs[:num_stacks] -= pedestal
 
-                # elif nnls_method == "scipy":
+                elif nnls_method == "fnnls":
+                    coeffs = fnnls(
+                        stacked_Ax,
+                        y,
+                        tolerance=_nnls_t,
+                        max_iterations=_nnls_i,
+                    )
+                    coeffs[:num_stacks] -= pedestal
+
+                elif nnls_method == "fennls":
+                    coeffs = fennls(
+                        stacked_Ax,
+                        y,
+                        tolerance=_nnls_t,
+                        max_iterations=_nnls_i,
+                    )
+                    coeffs[:num_stacks] -= pedestal
                 else:
 
                     coeffs, rnorm, info = scipy.optimize._nnls._nnls(
-                        stacked_Ax, y + off, _nnls_i
+                        stacked_Ax, y, _nnls_i
                     )
-                    coeffs[:num_stacks] -= off
+                    coeffs[:num_stacks] -= pedestal
 
                 t2 = time()
-                print(f"NNLS fitting... DONE {t2-t1:.3f}s")
+                # print("\r" + f"NNLS fitting... DONE {t2-t1:.3f}s", flush=True)
+                log_with_offset(
+                    LINE_UP + f"NNLS fitting...         DONE in {t2-t1:.3f}s",
+                    curr_line=curr_line,
+                )
 
                 out_coeffs[ok_temp] = coeffs
                 stacked_modelf = np.dot(out_coeffs, stacked_A)
@@ -1524,25 +1658,44 @@ class MultiRegionFit:
                         * stacked_ivarf
                     )[stacked_fit_mask]
                 )
-                output_table.add_row(
-                    [
-                        iteration,
-                        chi2,
-                        _nnls_i,
-                        state_iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
-                        _nnls_t,
-                        rows,
-                        id_shifts,
-                        n_shifted_samples,
-                        t2 - t1,
-                        time() - t0,
-                        ok_temp.sum(),
-                        *out_coeffs[:temp_offset],
-                        *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
-                    ]
-                )
+                # output_table.add_row(
+                #     [
+                #         iteration,
+                #         chi2,
+                #         _nnls_i,
+                #         state_iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
+                #         _nnls_t,
+                #         rows,
+                #         id_shifts,
+                #         n_shifted_samples,
+                #         t2 - t1,
+                #         time() - t0,
+                #         ok_temp.sum(),
+                #         *out_coeffs[:temp_offset],
+                #         *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
+                #     ]
+                # )
+                output_table[iteration] = [
+                    iteration,
+                    chi2,
+                    _nnls_i,
+                    state_iters if (nnls_method == "adelie" and HAS_ADELIE) else 0,
+                    _nnls_t,
+                    rows,
+                    id_shifts,
+                    n_shifted_samples,
+                    t2 - t1,
+                    time() - t0,
+                    ok_temp.sum(),
+                    *out_coeffs[:temp_offset],
+                    *out_coeffs[temp_offset:].reshape(self.n_regions, -1),
+                ]
+
                 output_table.write(self.output_table_path, overwrite=True)
-                print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
+                # print(f"Iteration {iteration}: chi2={chi2:.3f}\n")
+                log_with_offset(
+                    f"Iteration {iteration}: chi2={chi2:.3f}", curr_line=curr_line
+                )
 
                 # Reset the template array
                 stacked_A[temp_offset:].fill(0.0)
@@ -1571,20 +1724,20 @@ class MultiRegionFit:
 
         # Refill array with best model
         print("Calculating covariance array...")
-        with multiprocessing.Pool(
-            processes=cpu_count,
-            initializer=_init_pipes_sampler,
-            initargs=(
-                fit_instructions,
-                veldisp,
-                self.MB.beams,
-            ),
-        ) as pool:
+        with multiprocessing.Pool(**pool_kwargs) as pool:
             for s_i, s in enumerate(self.regions_seg_ids):
                 pool.apply_async(
                     stacked_fn,
                     (s_i, s),
-                    kwds={"rows": best_rows, "id_shifts": best_id_shifts},
+                    kwds={
+                        "rows": best_rows,
+                        "id_shifts": best_id_shifts,
+                        "spectral_dir": (
+                            str(self.pipes_dir / "spec" / self.run_name)
+                            if cache_spec
+                            else None
+                        ),
+                    },
                     error_callback=print,
                 )
             pool.close()
@@ -1618,19 +1771,21 @@ class MultiRegionFit:
         if save_stacks:
             print("Generating models...")
             with multiprocessing.Pool(
-                processes=cpu_count,
-                initializer=_init_pipes_sampler,
-                initargs=(
-                    fit_instructions,
-                    veldisp,
-                    self.MB.beams,
-                ),
+                **pool_kwargs,
             ) as pool:
                 for s_i, s in enumerate(self.regions_seg_ids):
                     pool.apply_async(
                         stacked_fn,
                         (s_i, s),
-                        kwds={"rows": best_rows, "id_shifts": best_id_shifts},
+                        kwds={
+                            "rows": best_rows,
+                            "id_shifts": best_id_shifts,
+                            "spectral_dir": (
+                                str(self.pipes_dir / "spec" / self.run_name)
+                                if cache_spec
+                                else None
+                            ),
+                        },
                         error_callback=print,
                     )
                 pool.close()
@@ -1739,18 +1894,18 @@ class MultiRegionFit:
             if memmap:
                 flat_beam_models = np.memmap(
                     temp_dir / "memmap_beams_model.dat",
-                    dtype=float,
+                    dtype=np.float32,
                     mode="w+",
                     shape=(beam_models_len),
                 )
             else:
 
                 shm_beam_models = smm.SharedMemory(
-                    size=np.dtype(float).itemsize * beam_models_len
+                    size=np.dtype(np.float32).itemsize * beam_models_len
                 )
                 flat_beam_models = np.ndarray(
                     (beam_models_len),
-                    dtype=float,
+                    dtype=np.float32,
                     buffer=shm_beam_models.buf,
                 )
 
