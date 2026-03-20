@@ -1066,23 +1066,27 @@ def create_spec_file(
     spec_dir : Path | None, optional
         The directory containing the spectral file, by default ``None``.
     spec_wavs : ArrayLike | None, optional
-        The wavelengths onto which the spectrum will be resampled, by 
+        The wavelengths onto which the spectrum will be resampled, by
         default ``None``.
     """
-    
+
     with h5py.File(posterior_dir / f"{post_id}.h5", "r") as post_file:
         samples2d = np.array(post_file["samples2d"])
 
     with h5py.File(spec_dir / f"{post_id}.h5", "w") as spec_file:
         spec_file.create_dataset("spec_wavs", data=spec_wavs)
 
-        spec_data = np.zeros((samples2d.shape[0], spec_wavs.shape[0]))
-        for s_i, param_vector in enumerate(samples2d):
+        unique_vectors, unique_inv = np.unique(samples2d, axis=0, return_inverse=True)
+        spec_data = np.zeros((unique_vectors.shape[0], spec_wavs.shape[0]))
+
+        for s_i, param_vector in enumerate(unique_vectors):
             spec_data[s_i] = spec_sampler.sample(
                 param_vector,
                 spec_wavs=spec_wavs,
             )[1]
-        spec_file.create_dataset("spec_data", data=spec_data)
+
+        spec_file.create_dataset("spec_data", data=spec_data[unique_inv])
+
 
 def pre_gen_spec(
     pipes_dir: Path,
@@ -1126,6 +1130,9 @@ def pre_gen_spec(
     post_ids = [
         f.stem for f in posterior_dir.glob("*.h5") if not (spec_dir / f.name).is_file()
     ]
+
+    if not len(post_ids) > 0:
+        return
 
     # Generate the spectra
     print("Generating resampled spectra...")
