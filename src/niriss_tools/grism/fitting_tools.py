@@ -10,13 +10,40 @@ from scipy import sparse
 
 __all__ = ["CDNNLS", "fnnls", "fennls"]
 
-import fnnlsEigen as fe
+try:
+    import fnnlsEigen as fe
+except:
+    pass
 
-def fennls(A, x, max_iterations=1000, tolerance=1e-6):
+
+def fennls(
+    A: ArrayLike, x: ArrayLike, max_iterations: int = 1000, tolerance: float = 1e-6
+) -> ArrayLike:
+    """
+    A wrapper around `~fnnlsEigen.fnnls`.
+
+    Parameters
+    ----------
+    A : ArrayLike
+        The coefficient array.
+    x : ArrayLike
+        The RHS vector.
+    max_iterations : int | None, optional
+        How many iterations to run, by default 1000.
+    tolerance : float, optional
+        The tolerance to use for the stopping condition, by default
+        ``1e-6``.
+
+    Returns
+    -------
+    ArrayLike
+        The solution vector.
+    """
+
     try:
         return fe.fnnls(
-            np.ascontiguousarray(A, dtype=np.float64),
-            x.astype(np.float64),
+            np.ascontiguousarray(A, dtype=np.float32),
+            x.astype(np.float32),
             max_iterations=max_iterations,
             tolerance=tolerance,
         )
@@ -24,13 +51,37 @@ def fennls(A, x, max_iterations=1000, tolerance=1e-6):
         print(e)
         return np.zeros(A.shape[1])
 
-def fnnls(A, x, max_iterations=1000, tolerance=1e-6):
+
+def fnnls(
+    A: ArrayLike, x: ArrayLike, max_iterations: int = 1000, tolerance: float = 1e-6
+) -> ArrayLike:
+    """
+    A wrapper around a numpy implementation of the FNNLS algorithm.
+
+    Parameters
+    ----------
+    A : ArrayLike
+        The coefficient array.
+    x : ArrayLike
+        The RHS vector.
+    max_iterations : int | None, optional
+        How many iterations to run, by default 1000.
+    tolerance : float, optional
+        The tolerance to use for the stopping condition, by default
+        ``1e-6``.
+
+    Returns
+    -------
+    ArrayLike
+        The solution vector.
+    """
     return _fnnls(
         np.dot(A.T, A),
         np.dot(A.T, x),
-        # iter_max=max_iterations,
-        # epsilon=tolerance,
+        iter_max=max_iterations,
+        epsilon=tolerance,
     )
+
 
 def _fnnls(AtA, Aty, epsilon=None, iter_max=None):
     """
@@ -73,8 +124,10 @@ def _fnnls(AtA, Aty, epsilon=None, iter_max=None):
         iter_max = 3 * n
 
     if Aty.ndim != 1 or Aty.shape[0] != n:
-        raise ValueError('Invalid dimension; got Aty vector of size {}, ' \
-                         'expected {}'.format(Aty.shape, n))
+        raise ValueError(
+            "Invalid dimension; got Aty vector of size {}, "
+            "expected {}".format(Aty.shape, n)
+        )
 
     # Represents passive and active sets.
     # If sets[j] is 0, then index j is in the active set (R in literature).
@@ -110,19 +163,19 @@ def _fnnls(AtA, Aty, epsilon=None, iter_max=None):
 
         # Update s. Solve (AtA)^p * s^p = (Aty)^p
         # s[P] = np.linalg.lstsq(AtA_in_p, Aty_in_p, rcond=None)[0]
-        s[R] = 0.
+        s[R] = 0.0
         s[P] = np.linalg.inv(AtA_in_p).dot(Aty_in_p)
 
         while np.any(s[P] <= epsilon):
             i += 1
 
-            mask = (s[P] <= epsilon)
+            mask = s[P] <= epsilon
             alpha = np.min(x[P][mask] / (x[P][mask] - s[P][mask]))
             x += alpha * (s - x)
 
             # Move all indices j in P such that x[j] = 0 to R
             # First get all indices where x == 0 in the MASKED x
-            zero_mask = (x[P] < epsilon)
+            zero_mask = x[P] < epsilon
             # These correspond to indices in P
             zeros = P[zero_mask]
             # Finally, update the passive/active sets.
@@ -138,12 +191,13 @@ def _fnnls(AtA, Aty, epsilon=None, iter_max=None):
             # Update s. Solve (AtA)^p * s^p = (Aty)^p
             # s[P] = np.linalg.lstsq(AtA_in_p, Aty_in_p, rcond=None)[0]
             s[P] = np.linalg.inv(AtA_in_p).dot(Aty_in_p)
-            s[R] = 0.
+            s[R] = 0.0
 
         x = s.copy()
         w = Aty - AtA.dot(x)
 
     return x
+
 
 class CDNNLS:
     """

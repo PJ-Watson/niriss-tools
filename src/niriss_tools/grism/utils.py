@@ -16,10 +16,17 @@ from grizli.model import BeamCutout, GrismDisperser
 from grizli.multifit import MultiBeam
 from tqdm import tqdm
 
-__all__ = ["gen_stacked_beams", "align_direct_images", "log_with_offset", "LINE_UP", "LINE_CLEAR"]
+__all__ = [
+    "gen_stacked_beams",
+    "align_direct_images",
+    "log_with_offset",
+    "LINE_UP",
+    "LINE_CLEAR",
+]
 
-LINE_UP = '\033[1A'
-LINE_CLEAR = '\x1b[2K'
+LINE_UP = "\033[1A"
+LINE_CLEAR = "\x1b[2K"
+
 
 def log_with_offset(s: str, blank_lines: int = 1, curr_line: str = "") -> None:
     """

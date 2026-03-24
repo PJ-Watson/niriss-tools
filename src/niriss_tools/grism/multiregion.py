@@ -34,7 +34,7 @@ from numpy.typing import ArrayLike
 from reproject import reproject_interp
 
 import niriss_tools
-from niriss_tools.grism.fitting_tools import CDNNLS, fnnls, fennls
+from niriss_tools.grism.fitting_tools import CDNNLS, fennls, fnnls
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
     BagpipesSampler,
@@ -43,10 +43,10 @@ from niriss_tools.grism.specgen import (
     pre_gen_spec,
 )
 from niriss_tools.grism.utils import (
+    LINE_UP,
     align_direct_images,
     gen_stacked_beams,
     log_with_offset,
-    LINE_UP,
 )
 from niriss_tools.pipeline.reduction import recursive_merge
 from niriss_tools.sed.binning import bin_and_save
@@ -215,6 +215,8 @@ class MultiRegionFit:
         self.field_name = config["grism"]["field_name"]
 
         self.use_stacks = config["grism"].get("use_stacks", True)
+
+        self.stack_beam_kwargs = config["grism"].get("stack_beam_kwargs", {})
 
         multibeam_kwargs = config["grism"].get("multibeam_kwargs", {})
 
@@ -472,6 +474,7 @@ class MultiRegionFit:
         use_stacks: bool = True,
         beams_path: PathLike | None = None,
         img_cutout: int = 500,
+        stack_beam_kwargs: dict = {},
         **multibeam_kwargs,
     ) -> tuple[PathLike, PathLike]:
         """
@@ -494,6 +497,9 @@ class MultiRegionFit:
             Make a slice of the original image with size in pixels
             ``[-cutout,+cutout]`` around the centre of the object, before
             alignment. By default, ``cutout=500``.
+        stack_beam_kwargs : dict, optional
+            Any additional parameters to pass through to
+            `~niriss_tools.grism.utils.gen_stacked_beams`.
         **multibeam_kwargs : dict, optional
             Any additional parameters to pass through to
             `grizli.multifit.MultiBeam`.
@@ -554,9 +560,13 @@ class MultiRegionFit:
                 if multibeam_kwargs is None:
                     multibeam_kwargs = self.multibeam_kwargs
 
+                if len(stack_beam_kwargs) == 0:
+                    stack_beam_kwargs = self.stack_beam_kwargs
+
                 if use_stacks:
                     multib = gen_stacked_beams(
                         beams_path,
+                        **stack_beam_kwargs,
                         **multibeam_kwargs,
                     )
                 else:
@@ -1503,7 +1513,7 @@ class MultiRegionFit:
                 # best-fit solution
                 if TWO_STAGE and (iteration == iterations[-1]):
 
-                    best_iter = np.argmin(output_table["chi2"])
+                    best_iter = np.nanargmin(output_table["chi2"])
 
                     rows = [int(s) for s in output_table["rows"][best_iter]]
                     id_shifts = [int(s) for s in output_table["id_shifts"][best_iter]]
