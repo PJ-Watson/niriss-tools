@@ -559,8 +559,8 @@ def gen_psf(multibeam: MultiBeam) -> dict:
     """
     Generate a PSF aligned with the direct image in extracted beams.
 
-    The PSF matches the rotation of the direct imaging using the ``"PA_V3"``
-    header keyword.
+    The PSF matches the rotation of the direct imaging using the
+    ``"PA_APER"`` header keyword.
 
     Parameters
     ----------
@@ -602,7 +602,7 @@ def gen_psf(multibeam: MultiBeam) -> dict:
             psf_wcs = WCS(psf["DET_DIST"])
             psf_wcs.wcs.crpix = (np.asarray(psf_data.shape) + 1) / 2
             psf_wcs.wcs.crval = [multibeam.ra, multibeam.dec]
-            rotation_angle_rad = np.radians(header["PA_V3"] - 360)
+            rotation_angle_rad = np.radians(header["PA_APER"] - 360)
             psf_wcs.wcs.cd = (
                 np.array(
                     [

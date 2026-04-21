@@ -4,8 +4,12 @@ Functions and classes for generating specific types of model spectra.
 
 import warnings
 from copy import deepcopy
+from functools import partial
+from multiprocessing import Pool
+from pathlib import Path
 
 import bagpipes
+import h5py
 import numpy as np
 import spectres
 from bagpipes import config, filters, utils
@@ -21,16 +25,9 @@ from bagpipes.models.igm_model import igm
 # from bagpipes.models.agn_model import agn
 from bagpipes.models.nebular_model import nebular
 from bagpipes.models.stellar_model import stellar
-from numpy.typing import ArrayLike
 from grizli.utils_numba.interp import interp_conserve_c
-from pathlib import Path
+from numpy.typing import ArrayLike
 from tqdm import tqdm
-
-
-from functools import partial
-
-from multiprocessing import Pool
-import h5py
 
 __all__ = [
     "ExtendedModelGalaxy",
@@ -1073,19 +1070,26 @@ def create_spec_file(
     with h5py.File(posterior_dir / f"{post_id}.h5", "r") as post_file:
         samples2d = np.array(post_file["samples2d"])
 
-    with h5py.File(spec_dir / f"{post_id}.h5", "w") as spec_file:
-        spec_file.create_dataset("spec_wavs", data=spec_wavs)
+    with h5py.File(spec_dir / f"{post_id}.h5", "a") as spec_file:
 
-        unique_vectors, unique_inv = np.unique(samples2d, axis=0, return_inverse=True)
-        spec_data = np.zeros((unique_vectors.shape[0], spec_wavs.shape[0]))
+        if not spec_file.get("spec_data"):
 
-        for s_i, param_vector in enumerate(unique_vectors):
-            spec_data[s_i] = spec_sampler.sample(
-                param_vector,
-                spec_wavs=spec_wavs,
-            )[1]
+            if not spec_file.get("spec_wavs"):
 
-        spec_file.create_dataset("spec_data", data=spec_data[unique_inv])
+                spec_file.create_dataset("spec_wavs", data=spec_wavs)
+
+            unique_vectors, unique_inv = np.unique(
+                samples2d, axis=0, return_inverse=True
+            )
+            spec_data = np.zeros((unique_vectors.shape[0], spec_wavs.shape[0]))
+
+            for s_i, param_vector in enumerate(unique_vectors):
+                spec_data[s_i] = spec_sampler.sample(
+                    param_vector,
+                    spec_wavs=spec_wavs,
+                )[1]
+
+            spec_file.create_dataset("spec_data", data=spec_data[unique_inv])
 
 
 def pre_gen_spec(
@@ -1127,9 +1131,7 @@ def pre_gen_spec(
     spec_dir = pipes_dir / "spec" / run
     spec_dir.mkdir(exist_ok=True, parents=True)
 
-    post_ids = [
-        f.stem for f in posterior_dir.glob("*.h5") if not (spec_dir / f.name).is_file()
-    ]
+    post_ids = [f.stem for f in posterior_dir.glob("*.h5")]
 
     if not len(post_ids) > 0:
         return

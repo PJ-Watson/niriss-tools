@@ -699,24 +699,26 @@ class MultiRegionFit:
 
             else:
                 with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-                    samples2d = np.array(post_file["samples2d"])[rows]
+                    samples2d = np.zeros(
+                        (
+                            len(rows) + len(id_shifts) * n_shifted_rows,
+                            post_file["samples2d"].shape[1],
+                        )
+                    )
+                    samples2d[: len(rows), :] = np.array(post_file["samples2d"])[rows]
 
                 # Just make one set of posterior samples from all possible seg ids
                 if (id_shifts is not None) and (len(id_shifts) > 0):
-                    for s in id_shifts:
+                    for s_i, s in enumerate(id_shifts):
                         shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
                         with h5py.File(
                             Path(posterior_dir) / f"{shifted_id}.h5", "r"
                         ) as post_file:
-                            samples2d = np.concatenate(
-                                (
-                                    samples2d,
-                                    np.array(post_file["samples2d"])[
-                                        rows[:n_shifted_rows]
-                                    ].reshape(n_shifted_rows, -1),
-                                ),
-                                axis=0,
-                            )
+                            samples2d[
+                                int(len(rows) + s_i * n_shifted_rows) : int(
+                                    len(rows) + (s_i + 1) * n_shifted_rows
+                                ) :
+                            ] = np.array(post_file["samples2d"])[rows[:n_shifted_rows]]
 
                 temps_resampled = np.zeros((samples2d.shape[0], spec_wavs.shape[0]))
                 for sample_i, sample in enumerate(samples2d):
@@ -809,29 +811,34 @@ class MultiRegionFit:
                 )
 
             with h5py.File(Path(posterior_dir) / f"{seg_id}.h5", "r") as post_file:
-                samples2d = np.array(post_file["samples2d"])[rows]
+                samples2d = np.zeros(
+                    (
+                        len(rows) + len(id_shifts) * n_shifted_rows,
+                        post_file["samples2d"].shape[1],
+                    )
+                )
+                samples2d[: len(rows), :] = np.array(post_file["samples2d"])[rows]
 
             # Just make one set of posterior samples from all possible seg ids
             if (id_shifts is not None) and (len(id_shifts) > 0):
-                for s in id_shifts:
+                for s_i, s in enumerate(id_shifts):
                     shifted_id = int((seg_id + s) % np.nanmax(seg_maps[0]))
                     with h5py.File(
                         Path(posterior_dir) / f"{shifted_id}.h5", "r"
                     ) as post_file:
-                        samples2d = np.concatenate(
-                            (
-                                samples2d,
-                                np.array(post_file["samples2d"])[
-                                    rows[:n_shifted_rows]
-                                ].reshape(n_shifted_rows, -1),
-                            ),
-                            axis=0,
-                        )
+                        samples2d[
+                            int(len(rows) + s_i * n_shifted_rows) : int(
+                                len(rows) + (s_i + 1) * n_shifted_rows
+                            ) :
+                        ] = np.array(post_file["samples2d"])[rows[:n_shifted_rows]]
 
             if return_line_flux:
                 line_fluxes = np.zeros(len(samples2d))
 
             for sample_i, sample in enumerate(samples2d):
+
+                if coeffs[f"bin_{seg_id}"][sample_i] == 0:
+                    continue
 
                 out = pipes_sampler.sample(
                     sample,
