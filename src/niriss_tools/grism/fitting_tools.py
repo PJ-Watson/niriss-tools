@@ -12,8 +12,9 @@ __all__ = ["CDNNLS", "fnnls", "fennls"]
 
 try:
     import fnnlsEigen as fe
+    HAS_EIGEN = True
 except:
-    pass
+    HAS_EIGEN = False
 
 
 def fennls(
@@ -39,7 +40,8 @@ def fennls(
     ArrayLike
         The solution vector.
     """
-
+    if not HAS_EIGEN:
+        raise ImportError("FNNLS Eigen is not installed.")
     try:
         return fe.fnnls(
             np.ascontiguousarray(A, dtype=np.float32),
