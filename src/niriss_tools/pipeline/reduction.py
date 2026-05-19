@@ -528,7 +528,10 @@ def grism_background_subtraction(
     bkg_box_size: float = 3,
     smooth_gauss_std: float = 1,
     min_bkg_thresh: float = 0.0,
-    grism_prep_fn: Callable | None = None,
+    background2d_kwargs: dict = {},
+    diffuse_catalogue_kwargs: dict = {},
+    grism_prep_kwargs: dict = {},
+    **kwargs,
 ):
     """
     Model and subtract a dispersed background from WFSS data.
@@ -552,9 +555,19 @@ def grism_background_subtraction(
         The minimum background value to be used. By default ``0``, which
         means that only positive values of the background will be
         dispersed and subtracted.
-    grism_prep_fn : Callable | None, optional
-        A wrapper function which takes the parameters ``rate_files`` and
-        ``grism_prep_kwargs``, and calculates the dispersed spectra.
+    background2d_kwargs : dict, optional
+        Any additional arguments to pass to
+        `photutils.background.Background2D`, by default ``{}``.
+    diffuse_catalogue_kwargs : dict, optional
+        Any additional arguments to pass to
+        `grizli.pipeline.auto_script.multiband_catalog, by default ``{}``.
+        Parameters passed here determine the extraction of the diffuse
+        background, rather than the science objects in the field.
+    grism_prep_kwargs : dict, optional
+        Any additional arguments to pass to
+        `grizli.pipeline.auto_script.grism_prep`, by default ``{}``.
+    **kwargs : dict, optional
+        Any additional keyword arguments.
     """
 
     from shutil import copy2
@@ -613,6 +626,7 @@ def grism_background_subtraction(
                     (filt_box, filt_box),
                     mask=sci_img >= thresh,
                     coverage_mask=wht_img == 0,
+                    **background2d_kwargs,
                 )
 
                 bkg_data = bkg.background
@@ -659,21 +673,22 @@ def grism_background_subtraction(
 
     phot_cat = auto_script.multiband_catalog(
         field_root=field_root,
-        **multiband_catalog_args,
+        **recursive_merge(multiband_catalog_args, diffuse_catalogue_kwargs),
     )
-
-    kwargs = auto_script.get_yml_parameters()
 
     os.chdir(prep_dir)
 
-    rate_files = [str(s) for s in Path.cwd().glob("*_rate.fits")][:]
+    default_grism_kwargs = auto_script.get_yml_parameters()["grism_prep_args"]
 
-    grism_prep_fn(rate_files=rate_files, grism_prep_kwargs=kwargs["grism_prep_args"])
+    default_grism_kwargs["files"] = [str(s) for s in Path.cwd().glob("*_rate.fits")][:]
+
+    grp = auto_script.grism_prep(
+        field_root=field_name,
+        **recursive_merge(default_grism_kwargs, grism_prep_kwargs),
+    )
 
     rate_backup_dir = prep_dir / "rate_backup"
     rate_backup_dir.mkdir(exist_ok=True, parents=True)
-
-    # prep_dir = prep_dir / "../Prep_v1"
 
     for flt_path in prep_dir.glob("*GrismFLT.fits"):
         flt_model = fits.getdata(flt_path, "MODEL")
