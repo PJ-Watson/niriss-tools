@@ -21,17 +21,15 @@ classifiers = [
 ]
 dependencies = [
     "astropy>=6.1",
-    "numpy>=1.26.4",
+    "numpy>=2.0.0",
     "matplotlib>=3.9",
     "tqdm>=4.67",
-    "scipy>=1.13",
+    "scipy>=1.15",
     "Cython>=3",
     "vorbin",
     "powerbin",
     "reproject>=0.14",
-    # One day I hope this dependency hell with drizzlepac can be resolved
-    # Update: fine, I'll do it myself
-    "drizzlepac@git+https://github.com/PJ-Watson/drizzlepac",
+    "drizzlepac",
     "photutils>=2.0",
     "shapely>=2.0.4",
     "bagpipes-extended@git+https://github.com/PJ-Watson/bagpipes-extended",

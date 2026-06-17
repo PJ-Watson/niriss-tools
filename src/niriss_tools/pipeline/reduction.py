@@ -683,7 +683,7 @@ def grism_background_subtraction(
     default_grism_kwargs["files"] = [str(s) for s in Path.cwd().glob("*_rate.fits")][:]
 
     grp = auto_script.grism_prep(
-        field_root=field_name,
+        field_root=field_root,
         **recursive_merge(default_grism_kwargs, grism_prep_kwargs),
     )
 
