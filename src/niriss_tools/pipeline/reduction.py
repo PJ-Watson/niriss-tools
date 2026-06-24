@@ -18,6 +18,9 @@ __all__ = [
     "recursive_merge",
     "load_assoc",
     "grism_background_subtraction",
+    "extract_fits_info",
+    "gaia_catalogue_from_obs_table",
+    "construct_exposure_table",
 ]
 
 
@@ -884,7 +887,14 @@ def extract_fits_info(fits_filepath: PathLike, assoc="") -> astropy.table.Table:
                 ext + 1,
                 h0["INSTRUME"],
                 h0["DETECTOR"],
-                (hdul["DQ", ext + 1].data > 0).sum(),
+            ]
+            try:
+                row += [
+                    (hdul["DQ", ext + 1].data > 0).sum(),
+                ]
+            except:
+                row += [np.nan]
+            row += [
                 expflag,
                 sunangle,
                 mdrizsky,
@@ -912,12 +922,17 @@ def extract_fits_info(fits_filepath: PathLike, assoc="") -> astropy.table.Table:
                 else:
                     row.append(np.nan)
 
-            wi = WCS(hdul["SCI", ext + 1].header, fobj=hdul)
-            co = wi.calc_footprint()
+            try:
 
-            row += wi.calc_footprint().flatten().tolist()
+                wi = WCS(hdul["SCI", ext + 1].header, fobj=hdul).celestial
+                co = wi.calc_footprint()
 
-            row.append(co)
+                row += wi.calc_footprint().flatten().tolist()
+
+                row.append(co)
+
+            except:
+                row += [np.nan] * 8 + [np.full((4, 2), np.nan)]
 
             row.append(modtime)
 
@@ -1015,7 +1030,10 @@ def construct_exposure_table(
 
         for file in file_dir.glob(ext_pattern):
             pool.apply_async(
-                extract_fits_info, args=(file,), callback=new_tab_data.append
+                extract_fits_info,
+                args=(file,),
+                callback=new_tab_data.append,
+                error_callback=print,
             )
         pool.close()
         pool.join()
