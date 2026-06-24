@@ -751,3 +751,178 @@ def grism_background_subtraction(
         field_root,
         filter_combinations={"ir": [f.upper() for f in filters]},
     )
+
+
+def extract_fits_info(fits_filepath: PathLike, assoc="") -> astropy.table.Table:
+    """
+    Populate a table with info derived from a FITS header.
+
+    Parameters
+    ----------
+    fits_filepath : PathLike
+        The path to the file of interest.
+    assoc : str, optional
+        The name of the association, by default ``""``.
+
+    Returns
+    -------
+    astropy.table.Table
+        The table containing all of the information.
+    """
+
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from grizli import utils as grizli_utils
+
+    modtime = astropy.time.Time(os.path.getmtime(fits_filepath), format="unix").mjd
+
+    s3_obj = ""
+    product = ""
+
+    with fits.open(fits_filepath) as hdul:
+
+        h0 = hdul[0].header
+
+        filename = fits_filepath.name
+        file = "_".join(filename.split("_")[:-1])
+        extension = filename.split("_")[-1].split(".")[0]
+
+        if filename.startswith("jw"):
+            filt = grizli_utils.parse_filter_from_header(h0)  # h0['FILTER']
+            if "PUPIL" in h0:
+                pupil = h0["PUPIL"]
+            else:
+                pupil = ""
+
+            exptime = h0["EFFEXPTM"]
+            expflag, sunangle = None, None
+
+        else:
+            filt = grizli_utils.parse_filter_from_header(h0)
+            pupil = ""
+            exptime = h0["EXPTIME"]
+            expflag = h0["EXPFLAG"]
+            sunangle = h0["SUNANGLE"]
+
+        names = [
+            "file",
+            "extension",
+            "dataset",
+            "assoc",
+            "parent",
+            "awspath",
+            "filter",
+            "pupil",
+            "exptime",
+            "expstart",
+            "sciext",
+            "instrume",
+            "detector",
+            "ndq",
+            "expflag",
+            "sunangle",
+            "mdrizsky",
+            "chipsky",
+            "gsky101",
+            "gsky102",
+            "gsky103",
+            "persnpix",
+            "perslevl",
+            "naxis1",
+            "naxis2",
+            "crpix1",
+            "crpix2",
+            "crval1",
+            "crval2",
+            "cd11",
+            "cd12",
+            "cd21",
+            "cd22",
+            "ra1",
+            "dec1",
+            "ra2",
+            "dec2",
+            "ra3",
+            "dec3",
+            "ra4",
+            "dec4",
+            "footprint",
+            "modtime",
+        ]
+
+        gsky = []
+        for i in range(3):
+            if f"GSKY10{i+1}" in h0:
+                gsky.append(h0[f"GSKY10{i+1}"])
+            else:
+                gsky.append(None)
+
+        rows = []
+        for ext in range(8):
+            if ("SCI", ext + 1) not in hdul:
+                continue
+
+            hi = hdul["SCI", ext + 1].header
+
+            if "MDRIZSKY" in hi:
+                mdrizsky = hi["MDRIZSKY"]
+            else:
+                mdrizsky = 0
+
+            if "CHIPSKY" in hi:
+                chipsky = hi["CHIPSKY"]
+            else:
+                chipsky = 0
+
+            row = [file, extension, file, assoc, product, os.path.dirname(s3_obj)]
+
+            row += [filt, pupil]
+
+            row += [
+                exptime,
+                h0["EXPSTART"],
+                ext + 1,
+                h0["INSTRUME"],
+                h0["DETECTOR"],
+                (hdul["DQ", ext + 1].data > 0).sum(),
+                expflag,
+                sunangle,
+                mdrizsky,
+                chipsky,
+            ]
+
+            row += gsky
+
+            row += [None, None]  # pernpix, persnlevl
+
+            for k in [
+                "NAXIS1",
+                "NAXIS2",
+                "CRPIX1",
+                "CRPIX2",
+                "CRVAL1",
+                "CRVAL2",
+                "CD1_1",
+                "CD1_2",
+                "CD2_1",
+                "CD2_2",
+            ]:
+                if k in hi:
+                    row.append(hi[k])
+                else:
+                    row.append(np.nan)
+
+            wi = WCS(hdul["SCI", ext + 1].header, fobj=hdul)
+            co = wi.calc_footprint()
+
+            row += wi.calc_footprint().flatten().tolist()
+
+            row.append(co)
+
+            row.append(modtime)
+
+            rows.append(row)
+
+        t = grizli_utils.GTable(rows=rows, names=names)
+
+    return t
