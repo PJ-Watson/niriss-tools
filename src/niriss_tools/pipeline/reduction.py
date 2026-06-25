@@ -950,6 +950,8 @@ def gaia_catalogue_from_obs_table(
     """
     Get GAIA catalogue, using an observation table as reference.
 
+    Modified from `~grizli.catalog.gaia_catalog_for_assoc`.
+
     Parameters
     ----------
     res : astropy.table.Table
@@ -1018,6 +1020,8 @@ def radec_catalogue_from_obs_table(
     """
     Get RA/Dec catalogue, using an observation table as reference.
 
+    Modified from `~grizli.catalog.get_radec_catalog`.
+
     Parameters
     ----------
     res : astropy.table.Table
@@ -1043,8 +1047,6 @@ def radec_catalogue_from_obs_table(
 
     from grizli import catalog, utils
 
-    # import get_gaia_radec_at_time, get_gaia_vizier
-
     query_kwargs = {
         "LS_DR9": {"db": "ls_dr9.tractor"},
         "LS_DR10": {"db": "ls_dr10.tractor"},
@@ -1057,7 +1059,6 @@ def radec_catalogue_from_obs_table(
         "WISE": catalog.get_irsa_catalog,
         "2MASS": catalog.get_twomass_catalog,
         "GAIA_Vizier": catalog.get_gaia_vizier,
-        # "GAIA": catalog.get_gaia_DR2_vizier,
         "GAIA": catalog.get_gaia_vizier,
         "NSC": catalog.get_nsc_catalog,
         "DES": catalog.get_desdr1_catalog,
@@ -1084,27 +1085,8 @@ def radec_catalogue_from_obs_table(
     ref_catalog = "None"
     ref_cat = []
 
-    for ref_src in reference_catalogs:
+    for ref_src in reference_catalogues:
         try:
-            # if ref_src == "GAIA":
-            #     try:
-            #         ref_cat = query_functions[ref_src](
-            #             ra=ra, dec=dec, radius=radius, use_mirror=False
-            #         )
-            #     except:
-            #         try:
-            #             ref_cat = query_functions[ref_src](
-            #                 ra=ra, dec=dec, radius=radius
-            #             )
-            #         except:
-            #             ref_cat = False
-
-            #     # Try GAIA mirror at Heidelberg
-            #     if ref_cat is False:
-            #         ref_cat = query_functions[ref_src](
-            #             ra=ra, dec=dec, radius=radius, use_mirror=True
-            #         )
-            # else:
             if ref_src in query_kwargs:
                 _kws = query_kwargs[ref_src]
             else:
@@ -1113,9 +1095,6 @@ def radec_catalogue_from_obs_table(
             _kws |= kwargs
 
             ref_cat = query_functions[ref_src](ra=ra, dec=dec, radius=radius, **_kws)
-            # #
-            # ref_cat = query_functions[ref_src](ra=ra, dec=dec,
-            #                                    radius=radius)
 
             valid = np.isfinite(ref_cat["ra"] + ref_cat["dec"])
             ref_cat = ref_cat[valid]
@@ -1132,11 +1111,6 @@ def radec_catalogue_from_obs_table(
 
     if ref_src.startswith("GAIA"):
 
-        # gaia_tbl = ref_cat  # utils.GTable.gread('gaia.fits')
-        # coo = get_gaia_radec_at_time(
-        #     gaia_tbl, date=kwargs["date"], format=date_format
-        # )
-
         rd = catalog.get_gaia_radec_at_time(
             ref_cat, np.mean(res["expstart"]), format="mjd"
         )
@@ -1146,27 +1120,11 @@ def radec_catalogue_from_obs_table(
         ref_cat["ra"] = rd.ra.deg
         ref_cat["dec"] = rd.dec.deg
 
-        # coo_tbl = utils.GTable()
-        # coo_tbl["ra"] = coo.ra
-        # coo_tbl["dec"] = coo.dec
-
-        # ok = np.isfinite(coo_tbl["ra"]) & np.isfinite(coo_tbl["dec"])
-
         ref_cat.meta["date"] = np.mean(res["expstart"])
         ref_cat.meta["datefmt"] = "mjd"
 
         msg = "Apply observation ({0},{1}) to GAIA catalog"
         print(msg.format(np.mean(res["expstart"]), "mjd"))
-
-        # table_to_regions(
-        #     coo_tbl[ok], output="{0}_{1}.reg".format(product, ref_src.lower())
-        # )
-
-        # coo_tbl["ra", "dec"][ok].write(
-        #     "{0}_{1}.radec".format(product, ref_src.lower()),
-        #     format="ascii.commented_header",
-        #     overwrite=True,
-        # )
 
     if not has_catalog:
         return False
