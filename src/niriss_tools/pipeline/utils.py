@@ -6,6 +6,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 from grizli import utils as grizli_utils
+from grizli.multifit import MultiBeam
 from numpy.typing import ArrayLike
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "getObsIdFromQuery",
     "getExpIdFromQuery",
     "queryMAST",
+    "separate_oned_spectra",
 ]
 
 
@@ -215,3 +217,55 @@ def queryMAST(
     uncalList["obs_id_num"] = getObsIdFromQuery(obsName=np.asarray(uncalList["obs_id"]))
     uncalList["exp_id_num"] = getExpIdFromQuery(obsName=np.asarray(uncalList["obs_id"]))
     return uncalList
+
+
+def separate_oned_spectra(mb: MultiBeam, tfit: dict | None = None) -> fits.HDUList:
+    """
+    Extract 1D spectra for each grism, e.g. GR150R/GR150C.
+
+    The standard 1D spectra derived by grizli combine all position angles
+    and grisms. This allows the output to be used directly with codes such
+    as `jwstwfss/line-finding <https://github.com/jwstwfss/line-finding>`_
+    (`Nedkova+26 <doi.org/10.5281/zenodo.19228845>`_).
+
+    Parameters
+    ----------
+    mb : MultiBeam
+        The grizli-extracted multiple beams object.
+    tfit : dict or None
+        Dictionary of fit results (templates, coefficients, etc) from
+        `~grizli.fitting.GroupFitter.template_at_z`.
+
+    Returns
+    -------
+    fits.HDUList
+        FITS version of the 1D spectrum tables.
+    """
+
+    from copy import deepcopy
+
+    new_hdul = mb.oned_spectrum_to_hdu(tfit=tfit)
+
+    for k, v in mb.PA.items():
+        for pa, beam_idx in v.items():
+            try:
+                _mb = deepcopy(mb)
+                _mb.beams = [_mb.beams[i] for i in beam_idx]
+                _mb._parse_beams(psf=_mb.psf_param_dict is not None)
+                _mb.initialize_masked_arrays()
+                if tfit is not None:
+                    _tfit = tfit.copy()
+                    _tfit["coeffs"] = np.asarray([tfit["coeffs"][i] for i in beam_idx])
+                    _tfit["coeffs"] = np.concatenate(
+                        [_tfit["coeffs"], tfit["coeffs"][mb.N :]]
+                    )
+                    out = _mb.oned_spectrum_to_hdu(tfit=_tfit)
+                else:
+                    _mb.oned_spectrum_to_hdu()
+                out[-1].header["EXTVER"] = pa
+                out[-1].header["FILTER"] = _mb.beams[0].grism.filter
+                new_hdul.append(out[-1])
+            except:
+                continue
+
+    return new_hdul
