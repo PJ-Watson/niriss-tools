@@ -14,6 +14,7 @@ from astropy.wcs import WCS
 from grizli import utils as grizli_utils
 from grizli.model import BeamCutout, GrismDisperser
 from grizli.multifit import MultiBeam
+from numpy.typing import ArrayLike
 from tqdm import tqdm
 
 __all__ = [
@@ -55,6 +56,30 @@ def log_with_offset(s: str, blank_lines: int = 1, curr_line: str = "") -> None:
     return
 
 
+def _cluster_beams_centres(
+    mb: MultiBeam, beam_idxs: ArrayLike, dbscan_kwargs: dict = {}
+) -> ArrayLike:
+    """
+    Perform DBSCAN clustering.
+    """
+
+    from sklearn.cluster import DBSCAN
+
+    # Detector coordinate centres
+    detector_coords = np.array(
+        [[mb.beams[b].beam.xc, mb.beams[b].beam.yc] for b in beam_idxs]
+    )
+
+    db = DBSCAN(**dbscan_kwargs).fit(detector_coords)
+    labels = np.array(db.labels_)
+
+    # print (labels)
+
+    grouped_beam_idxs = [beam_idxs[labels == u] for u in np.unique(labels)]
+
+    return grouped_beam_idxs
+
+
 def gen_stacked_beams(
     mb: str | MultiBeam,
     pixfrac: float = 1.0,
@@ -63,7 +88,8 @@ def gen_stacked_beams(
     fit_trace_shift: bool = False,
     trace_shift_kwargs: dict = {},
     cluster_beams: bool = False,
-    dbscan_kwargs: dict = {"eps": 5},
+    dbscan_kwargs: dict = {"eps": 5, "min_samples": 3},
+    split_by_fwcpos: bool = True,
     **multibeam_kwargs,
 ):
     """
@@ -107,7 +133,11 @@ def gen_stacked_beams(
         of an increased number of stacked beams. By default ``False``.
     dbscan_kwargs : dict, optional
         Any additional parameters to pass through to
-        `sklean.cluster.DBSCAN`. By default ``dbscan_kwargs={"eps":5}``.
+        `sklean.cluster.DBSCAN`. By default ``dbscan_kwargs={"eps": 5,
+        "min_samples": 3}``.
+    split_by_fwcpos : bool, optional
+        Split beams by the NIRISS filter wheel position angle, in addition
+        to the blocking filter and grism. By default ``True``.
     **multibeam_kwargs : dict, optional
         Any additional parameters to pass through to
         `~grizli.multifit.MultiBeam` when loading the original object.
@@ -135,23 +165,29 @@ def gen_stacked_beams(
     for filt, pa_info in tqdm(mb.PA.items(), desc="Stacking beams"):
         for pa, pa_beam_idxs in pa_info.items():
 
+            pa_beam_idxs = np.array(pa_beam_idxs)
+
             if cluster_beams:
 
-                pa_beam_idxs = np.array(pa_beam_idxs)
+                if split_by_fwcpos:
+                    # Round to avoid numerical noise
+                    fwcpos_arr = np.round(
+                        np.asarray([mb.beams[b].beam.fwcpos for b in pa_beam_idxs]), 3
+                    )
+                    grouped_beam_idxs = []
 
-                # Detector coordinate centres
-                detector_coords = np.array(
-                    [[mb.beams[b].beam.xc, mb.beams[b].beam.yc] for b in pa_beam_idxs]
-                )
+                    unique, u_inv = np.unique(fwcpos_arr, return_inverse=True)
 
-                from sklearn.cluster import DBSCAN
-
-                db = DBSCAN(**dbscan_kwargs).fit(detector_coords)
-                labels = np.array(db.labels_)
-
-                grouped_beam_idxs = [
-                    pa_beam_idxs[labels == u] for u in np.unique(labels)
-                ]
+                    for i, u in enumerate(unique):
+                        grouped_beam_idxs.extend(
+                            _cluster_beams_centres(
+                                mb, pa_beam_idxs[u_inv == i], dbscan_kwargs
+                            )
+                        )
+                else:
+                    grouped_beam_idxs = _cluster_beams_centres(
+                        mb, pa_beam_idxs, dbscan_kwargs
+                    )
 
             else:
                 grouped_beam_idxs = [pa_beam_idxs]
