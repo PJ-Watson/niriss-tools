@@ -167,28 +167,28 @@ def gen_stacked_beams(
 
             pa_beam_idxs = np.array(pa_beam_idxs)
 
-            if cluster_beams:
+            if split_by_fwcpos:
+                # Round to avoid numerical noise
+                fwcpos_arr = np.round(
+                    np.asarray([mb.beams[b].beam.fwcpos for b in pa_beam_idxs]), 3
+                )
+                grouped_beam_idxs = []
 
-                if split_by_fwcpos:
-                    # Round to avoid numerical noise
-                    fwcpos_arr = np.round(
-                        np.asarray([mb.beams[b].beam.fwcpos for b in pa_beam_idxs]), 3
-                    )
-                    grouped_beam_idxs = []
+                unique, u_inv = np.unique(fwcpos_arr, return_inverse=True)
 
-                    unique, u_inv = np.unique(fwcpos_arr, return_inverse=True)
-
-                    for i, u in enumerate(unique):
+                for i, u in enumerate(unique):
+                    if cluster_beams:
                         grouped_beam_idxs.extend(
                             _cluster_beams_centres(
                                 mb, pa_beam_idxs[u_inv == i], dbscan_kwargs
                             )
                         )
-                else:
-                    grouped_beam_idxs = _cluster_beams_centres(
-                        mb, pa_beam_idxs, dbscan_kwargs
-                    )
-
+                    else:
+                        grouped_beam_idxs.extend(np.asarray([pa_beam_idxs[u_inv == i]]))
+            elif cluster_beams:
+                grouped_beam_idxs = _cluster_beams_centres(
+                    mb, pa_beam_idxs, dbscan_kwargs
+                )
             else:
                 grouped_beam_idxs = [pa_beam_idxs]
 
