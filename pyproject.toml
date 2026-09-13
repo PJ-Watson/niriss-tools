@@ -37,7 +37,8 @@ dependencies = [
     "grizli[jwst,aws]@git+https://github.com/PJ-Watson/grizli@new_workflow",
     "bottleneck",
     "pypher>=0.7.3",
-    "tomlkit"
+    "tomlkit",
+    "psutil"
 ]
 
 [project.optional-dependencies]

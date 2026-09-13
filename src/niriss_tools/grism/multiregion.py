@@ -1634,6 +1634,29 @@ class MultiRegionFit:
         )
 
     def initialise_shared_memory(self, n_spec_per_region: int, memmap: bool = False):
+        """
+        Intitialise the shared memory arrays for multiprocessing.
+
+        Currently constructs one array for the sampled spectra, and one
+        to hold the dispersed spectra and any polynomial or background
+        templates.
+
+        Parameters
+        ----------
+        n_spec_per_region : int
+            The number of template spectra that will be used per region.
+        memmap : bool, optional
+            If ``True``, the forward-modelled spectra will be placed in
+            an array stored in a binary file on disk using `numpy.memmap`.
+            By default ``False``, as this is much slower to access than
+            arrays stored in RAM, but can be used to work around
+            out of memory errors.
+
+        Raises
+        ------
+        MemoryError
+            If the amount of memory requested exceeds the current amount available.
+        """
 
         # Initialise the shared memory for the sampled spectra
         model_spectra_arr_shape = (
@@ -1641,6 +1664,31 @@ class MultiRegionFit:
             n_spec_per_region,
             len(self.spec_wavs),
         )
+
+        # This is the large array of models. Each row corresponds to a
+        # (probably) unique template, forward-modelled across all beams,
+        # and flattened.
+        stacked_A_shape = (
+            self.temp_offset + n_spec_per_region * self.n_regions,
+            self.MB.Nmask,
+        )
+
+        if not memmap:
+            # Check that there is enough free memory before trying to allocate it
+            import psutil
+
+            total_req = (
+                np.prod(model_spectra_arr_shape) + np.prod(stacked_A_shape)
+            ) * np.dtype(float_dtype).itemsize
+            total_avail = psutil.virtual_memory().available
+
+            if total_req > total_avail:
+                raise MemoryError(
+                    "The required memory would exceed the amount available. "
+                    "Try passing `memmap=True`, or reducing the number of "
+                    "samples and regions."
+                )
+
         self.shm_model_spectra = self.smm.SharedMemory(
             size=np.dtype(float_dtype).itemsize * np.prod(model_spectra_arr_shape),
         )
@@ -1652,14 +1700,6 @@ class MultiRegionFit:
 
         # Ensure the array is blank on first run
         self.model_spectra_arr.fill(0.0)
-
-        # This is the large array of models. Each row corresponds to a
-        # (probably) unique template, forward-modelled across all beams,
-        # and flattened.
-        stacked_A_shape = (
-            self.temp_offset + n_spec_per_region * self.n_regions,
-            self.MB.Nmask,
-        )
 
         if memmap:
             self.stacked_A = np.memmap(
