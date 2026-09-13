@@ -33,6 +33,8 @@ from reproject import reproject_interp
 import niriss_tools
 from niriss_tools.grism.bagpipes_utils import BagpipesTemplateSampler
 from niriss_tools.grism.fitting_tools import CDNNLS, fennls, fnnls
+
+# from niriss_tools.grism.samplers import GrizliTemplateSampler
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
     BagpipesSpecGenerator,
@@ -832,6 +834,18 @@ class MultiRegionFit:
             veldisp=veldisp,
             spec_wavs=self.spec_wavs,
         )
+        # self.template_sampler = GrizliTemplateSampler(
+        #     posterior_dir=(self.pipes_dir / "posterior" / self.run_name),
+        #     seed=seed,
+        #     cpu_count=cpu_count,
+        #     cache_all_spectra=cache_spec,
+        #     veldisp=veldisp,
+        #     spec_wavs=self.spec_wavs,
+        #     redshift=self.obj_z,
+        # )
+        # n_samples = self.template_sampler.Ntemp
+        # n_shifted = 0
+        # n_shifted_samples = 0
 
         # Try to allow for both memory and file-backed multiprocessing of
         # large arrays
@@ -1021,6 +1035,19 @@ class MultiRegionFit:
 
                 # Remove any negative or zero templates
                 ok_temp = np.sum(self.stacked_A, axis=1) > 0
+
+                # TODO: finding which of the forward modelled templates are unique is
+                # the main bottleneck here. We make the assumption that the sum is
+                # unlikely to be identical between two different models.
+                # print (np.isnan(self.stacked_A).sum())
+                # _, unique_idxs = np.unique(self.stacked_A, axis=0, return_index=True)
+                _, unique_idxs = np.unique(
+                    np.sum(self.stacked_A, axis=1), return_index=True
+                )
+                unique_temp_mask = np.isin(
+                    np.arange(self.stacked_A.shape[0]), unique_idxs
+                )
+                ok_temp &= unique_temp_mask
 
                 out_coeffs = np.zeros(self.stacked_A.shape[0])
 
@@ -1352,6 +1379,7 @@ class MultiRegionFit:
                 print(f"Generating map for {l_v["grizli"]}...")
                 # print("Generating nebular lines...")
                 self.template_sampler.gen_emline_spectra(emline=l_v["cloudy"])
+                # self.template_sampler.gen_emline_spectra(emline=l_v["grizli"])
 
                 self.model_spectra_arr[:].fill(0.0)
 
@@ -1370,16 +1398,22 @@ class MultiRegionFit:
                     self.stacked_A[self.temp_offset :],
                 )
 
-                # line_sn = np.nansum(
-                #     stacked_A[self.temp_offset:] * out_coeffs[self.temp_offset:]
-                # ) / np.sqrt(
-                #     np.nansum(( stacked_A[self.temp_offset:] * coeffs_errs[self.temp_offset:]) ** 2)
-                # )
+                line_sn = np.nansum(
+                    np.dot(
+                        out_coeffs[self.temp_offset :],
+                        self.stacked_A[self.temp_offset :],
+                    )
+                ) / np.sqrt(
+                    np.nansum(
+                        np.dot(
+                            coeffs_errs[self.temp_offset :],
+                            self.stacked_A[self.temp_offset :],
+                        )
+                        ** 2
+                    )
+                )
 
                 masked_contf = masked_modelf - masked_nebularf
-
-                # self.model_spectra_arr[:] = full_temp_arr[:]
-                # del full_temp_arr
 
                 # Reset the forward model array
                 self.stacked_A[self.temp_offset :].fill(0.0)
@@ -1435,13 +1469,11 @@ class MultiRegionFit:
 
                     if add_hdu is None:
                         add_hdu = hdu
-
-                        # beams_copy = [b.beam.model.copy() for b in self.MB.beams]
                     else:
                         hdu[-3].header["EXTNAME"] = "MODEL"
                         add_hdu.append(hdu[-3])
                         line_flux_i = np.nansum(hdu[-3].data) * 1e-17
-                        # line_err_i = line_flux_i / line_sn
+                        line_err_i = line_flux_i / line_sn
 
                 saved_lines.append(l_v["grizli"])
 
@@ -1469,10 +1501,10 @@ class MultiRegionFit:
                     line_flux_i,
                     "Line flux, erg/s/cm2",
                 )
-                # line_hdu[0].header["ERR{0:03d}".format(li)] = (
-                #     line_err_i,
-                #     "Line flux err, erg/s/cm2",
-                # )
+                line_hdu[0].header["ERR{0:03d}".format(li)] = (
+                    line_err_i,
+                    "Line flux err, erg/s/cm2",
+                )
 
             if line_hdu is not None:
                 line_hdu[0].header["HASLINES"] = (
