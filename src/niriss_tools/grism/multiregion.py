@@ -29,6 +29,7 @@ from grizli import utils as grizli_utils
 from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
 from reproject import reproject_interp
+from tqdm import tqdm
 
 import niriss_tools
 from niriss_tools.grism.bagpipes_utils import BagpipesTemplateSampler
@@ -1371,12 +1372,17 @@ class MultiRegionFit:
 
             self.stacked_A[self.temp_offset :].fill(0.0)
 
-            for l_i, l_v in enumerate(use_lines):
+            # for l_i, l_v in enumerate(use_lines):
+            for l_i, l_v in tqdm(
+                enumerate(use_lines),
+                desc="Generating emission line maps",
+                total=len(use_lines),
+            ):
 
                 if not check_coverage(l_v["wave"] * (1 + z)):
                     continue
 
-                print(f"Generating map for {l_v["grizli"]}...")
+                # log_with_offset(f"Generating map for {l_v["grizli"]}")
                 # print("Generating nebular lines...")
                 self.template_sampler.gen_emline_spectra(emline=l_v["cloudy"])
                 # self.template_sampler.gen_emline_spectra(emline=l_v["grizli"])

@@ -2,6 +2,7 @@
 General utility functions related to handling grism data.
 """
 
+import datetime
 from copy import deepcopy
 from os import PathLike
 from pathlib import Path
@@ -30,7 +31,14 @@ LINE_UP = "\033[1A"
 LINE_CLEAR = "\x1b[2K"
 
 
-def log_with_offset(s: str, blank_lines: int = 1, curr_line: str = "") -> None:
+def log_with_offset(
+    s: str,
+    blank_lines: int = 1,
+    curr_line: str = "",
+    logfile: Path | None = None,
+    verbose: bool = True,
+    timestamp: bool = True,
+) -> None:
     """
     Print to previous lines on the console.
 
@@ -43,16 +51,32 @@ def log_with_offset(s: str, blank_lines: int = 1, curr_line: str = "") -> None:
         previous, by default ``1``.
     curr_line : str, optional
         The string to print to the current line, by default ``""``.
+    logfile : Path | None, optional
+        The file to write all information to. If ``None`` (default),
+        logs will only be printed to the console.
+    verbose : bool, optional
+        If ``True`` (default), logs will be printed to the console.
+    timestamp : bool, optional
+        If ``True`` (default), messages in ``logfile`` will include the
+        current timestamp.
     """
 
-    print(
-        (blank_lines + 1) * LINE_UP
-        + LINE_CLEAR
-        + s
-        + (blank_lines + 1) * ("\n" + LINE_CLEAR)
-        + curr_line,
-        flush=True,
-    )
+    if verbose:
+        print(
+            (blank_lines + 1) * LINE_UP
+            + LINE_CLEAR
+            + s
+            + (blank_lines + 1) * ("\n" + LINE_CLEAR)
+            + curr_line,
+            flush=True,
+        )
+
+    if timestamp:
+        s = f"[{datetime.datetime.now()}] {s}"
+
+    if logfile is not None:
+        with open(logfile, "a") as f:
+            print(s, file=f, flush=True)
 
     return
 
