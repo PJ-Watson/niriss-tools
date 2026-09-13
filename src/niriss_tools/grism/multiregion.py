@@ -793,6 +793,8 @@ class MultiRegionFit:
 
         self.spec_wavs = spec_wavs
 
+        self.seed = seed
+
         if memmap:
             if temp_dir is None:
                 temp_dir = Path.cwd()
@@ -893,7 +895,7 @@ class MultiRegionFit:
         # TODO: make the output name a parameter?
         self.output_table_path = multireg_out_dir / (
             f"{self.obj_id}_{len(np.unique(self.regions_phot_cat["bin_id"]))}"
-            f"bins_{n_iters}iters_{n_samples}samples_z_{z}_sig_{veldisp}.ecsv"
+            f"bins_{n_iters}iters_{n_samples}samples_z_{self.obj_z}_sig_{veldisp}.ecsv"
         )
 
         # The function to produce the templates - only a couple of
@@ -953,13 +955,13 @@ class MultiRegionFit:
             )
 
         # Check if seed was previously set, write to table if not
-        seed = output_table.meta.get("RNGSEED", [seed])[0]
-        output_table.meta["RNGSEED"] = (seed, "Random seed")
+        seed = output_table.meta.get("RNGSEED", [self.seed])[0]
+        output_table.meta["RNGSEED"] = (self.seed, "Random seed")
 
         output_table.meta["ID"] = (self.obj_id, "Object ID")
         output_table.meta["RA"] = (self.ra, "Right Ascension")
         output_table.meta["DEC"] = (self.dec, "Declination")
-        output_table.meta["Z"] = (z, "Best-fit redshift")
+        output_table.meta["Z"] = (self.obj_z, "Best-fit redshift")
         output_table.meta["DOF"] = (self.MB.DoF, "Degrees of freedom (active pixels)")
 
         # Check if the table length matches the expected number of iterations
@@ -978,6 +980,15 @@ class MultiRegionFit:
 
             iterations = np.arange(n_prev_iters, total_iters)
 
+            # Pass `verbose` parameter as 0, 1, 2:
+            # 0 : No info printed anywhere
+            # 1 : tqdm progress bars
+            # 2 : all info printed
+            # Look into using logging module as well
+            # for iteration in tqdm(iterations):
+            #     import time
+            #     time.sleep(2)
+            #     continue
             for iteration in iterations:
                 try:
                     curr_line = (
@@ -1013,6 +1024,9 @@ class MultiRegionFit:
                 )
                 t0 = time()
 
+                # Generate the template spectra
+                log_with_offset(f"Generating models...", curr_line=curr_line)
+
                 self.template_sampler.gen_all_spectra_from_seeds(
                     model_seeds=model_seeds,
                     extra_region_idxs=id_shifts,
@@ -1022,29 +1036,31 @@ class MultiRegionFit:
                     shared_memory_shape=self.model_spectra_arr.shape,
                 )
 
-                # Generate the forward-modelled spectra
-                log_with_offset(f"Generating models...", curr_line=curr_line)
-
-                self.process_pool.starmap(fwd_model_fn, enumerate(self.regions_seg_ids))
-
-                t1 = time()
-
+                t0p5 = time()
                 log_with_offset(
-                    LINE_UP + f"Generating models...    DONE in {t1-t0:.3f}s",
+                    LINE_UP + f"Generating models...    DONE in {t0p5-t0:.3f}s",
+                    curr_line=curr_line,
+                )
+
+                # Generate the forward-modelled spectra
+                log_with_offset(f"Dispersing spectra...", curr_line=curr_line)
+                self.process_pool.starmap(fwd_model_fn, enumerate(self.regions_seg_ids))
+                t1 = time()
+                log_with_offset(
+                    LINE_UP + f"Dispersing spectra...    DONE in {t1-t0p5:.3f}s",
                     curr_line=curr_line,
                 )
 
                 # Remove any negative or zero templates
-                ok_temp = np.sum(self.stacked_A, axis=1) > 0
+                summed_temps = np.sum(self.stacked_A, axis=1)
+                ok_temp = summed_temps > 0
 
                 # TODO: finding which of the forward modelled templates are unique is
                 # the main bottleneck here. We make the assumption that the sum is
                 # unlikely to be identical between two different models.
                 # print (np.isnan(self.stacked_A).sum())
                 # _, unique_idxs = np.unique(self.stacked_A, axis=0, return_index=True)
-                _, unique_idxs = np.unique(
-                    np.sum(self.stacked_A, axis=1), return_index=True
-                )
+                _, unique_idxs = np.unique(summed_temps, return_index=True)
                 unique_temp_mask = np.isin(
                     np.arange(self.stacked_A.shape[0]), unique_idxs
                 )
@@ -1337,7 +1353,7 @@ class MultiRegionFit:
             stacked_hdul.extend(hdus)
 
         stacked_hdul.writeto(
-            multireg_out_dir / f"regions_{self.obj_id:05d}_z_{z}_stacked.fits",
+            multireg_out_dir / f"regions_{self.obj_id:05d}_z_{self.obj_z}_stacked.fits",
             output_verify="silentfix",
             overwrite=True,
         )
@@ -1379,7 +1395,7 @@ class MultiRegionFit:
                 total=len(use_lines),
             ):
 
-                if not check_coverage(l_v["wave"] * (1 + z)):
+                if not check_coverage(l_v["wave"] * (1 + self.obj_z)):
                     continue
 
                 # log_with_offset(f"Generating map for {l_v["grizli"]}")
@@ -1445,12 +1461,12 @@ class MultiRegionFit:
                         self.MB.beams,
                         ra=self.ra,
                         dec=self.dec,
-                        wave=l_v["wave"] * (1 + z),
+                        wave=l_v["wave"] * (1 + self.obj_z),
                         fcontam=self.MB.fcontam,
                         **pline,
                     )
 
-                    hdu[0].header["REDSHIFT"] = (z, "Redshift used")
+                    hdu[0].header["REDSHIFT"] = (self.obj_z, "Redshift used")
                     hdu[0].header["CHI2"] = (
                         output_table["chi2"][best_iter],
                         "Chi^2 statistic",
@@ -1467,7 +1483,7 @@ class MultiRegionFit:
                     hdu[0].header = self.add_pipes_info(hdu[0].header)
                     for e in [-4, -3, -2, -1]:
                         hdu[e].header["EXTVER"] = l_v["grizli"]
-                        hdu[e].header["REDSHIFT"] = (z, "Redshift used")
+                        hdu[e].header["REDSHIFT"] = (self.obj_z, "Redshift used")
                         hdu[e].header["RESTWAVE"] = (
                             l_v["wave"],
                             "Line rest wavelength",
@@ -1525,7 +1541,7 @@ class MultiRegionFit:
 
                 line_hdu.writeto(
                     multireg_out_dir
-                    / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
+                    / f"regions_{self.obj_id:05d}_z_{self.obj_z}_{pline.get("pixscale", 0.06)}arcsec.line.fits",
                     output_verify="silentfix",
                     overwrite=True,
                 )
@@ -1567,7 +1583,7 @@ class MultiRegionFit:
                     )
                     fig.savefig(
                         multireg_out_dir
-                        / f"regions_{self.obj_id:05d}_z_{z}_{pline.get("pixscale", 0.06)}arcsec.line.png",
+                        / f"regions_{self.obj_id:05d}_z_{self.obj_z}_{pline.get("pixscale", 0.06)}arcsec.line.png",
                     )
 
         return

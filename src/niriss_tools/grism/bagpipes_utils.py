@@ -65,6 +65,11 @@ class BagpipesTemplateSampler(TemplateSampler):
         on-the-fly during sampling. Which is more efficient depends on
         whether the total number of spectra is substantially lower than
         the number of spectra that may be sampled during fitting.
+
+        TODO: Inlcude this explanation somewhere
+        Why not cache spectra when generating the model atlas? bagpipes
+        speed depends on the spectral resolution. Broad and medium band photometry
+         is much faster than for a 2x oversampled NIRISS spectrum.
     veldisp : float, optional
         The velocity dispersion of the model galaxy in km/s, by default
         ``50``.
@@ -113,6 +118,17 @@ class BagpipesTemplateSampler(TemplateSampler):
         self.veldisp = veldisp
         self.spec_wavs = spec_wavs
 
+        self.dummy_spec_gen = BagpipesSpecGenerator(
+            self.fit_instructions, self.veldisp, self.spec_wavs
+        )
+        self.dummy_spec_gen.sample(
+            self.load_model_params(posterior_dir / f"{self.posterior_ids[0]}.h5")[0]
+        )
+
+        self.model_comp = self.dummy_spec_gen.model_components
+
+        self.param_names = self.dummy_spec_gen.params
+
         self.initialise_process_pool(self.cpu_count)
 
         params_lists = self.process_pool.map(
@@ -122,7 +138,19 @@ class BagpipesTemplateSampler(TemplateSampler):
 
         params_array = np.concatenate(params_lists, axis=0)
 
-        u, inv = np.unique(params_array, return_inverse=True)
+        # Normalise all masses to the median.
+        # This should allow templates to be close enough to their unnormalised
+        # values (thereby avoiding very large/small coefficients during the fit),
+        # whilst minimising the number of templates to generate
+        for p_i, p in enumerate(self.param_names):
+            if "massformed" in p:
+                params_array[:, p_i] = np.nanmedian(params_array[:, p_i])
+
+        # Keep as string for now, reconsider later if np.searchsorted adds
+        # support for axes
+        params_array = np.array([str(r.tolist()) for r in params_array])
+
+        u, inv = np.unique(params_array, return_inverse=True, axis=0)
 
         self.all_model_params = u
 
@@ -133,10 +161,11 @@ class BagpipesTemplateSampler(TemplateSampler):
 
         self.all_model_spectra = None
         self.all_model_line_fluxes = None
+
         if self.cache_all_spectra:
 
             self.all_model_spectra, self.all_model_line_fluxes = (
-                self.gen_spectra_from_params(self.all_model_params[:])
+                self.gen_spectra_from_params(self.all_model_params)
             )
 
     def gen_all_spectra_from_seeds(
@@ -373,16 +402,7 @@ class BagpipesTemplateSampler(TemplateSampler):
         )
         unique_line_fluxes = self.model_line_fluxes[unique_idxs]
 
-        dummy_spec_gen = BagpipesSpecGenerator(
-            self.fit_instructions, self.veldisp, self.spec_wavs
-        )
-        dummy_spec_gen.sample(ast.literal_eval(self.all_model_params[0]))
-
-        model_comp = dummy_spec_gen.model_components
-
-        self.param_names = dummy_spec_gen.params
-
-        model_wavs_rf = dummy_spec_gen.model_gal.wavelengths
+        model_wavs_rf = self.dummy_spec_gen.model_gal.wavelengths
 
         if "redshift" in self.param_names:
             z_idx = (np.array(self.param_names) == "redshift").argmax()
@@ -396,7 +416,7 @@ class BagpipesTemplateSampler(TemplateSampler):
         emline_idxs = sorter[np.searchsorted(self.line_names, emline, sorter=sorter)]
 
         emline_wavs_rf = self.line_wavs_rf[emline_idxs] * (
-            1 + (model_comp["nebular"].get("velshift", 0) / (3 * 10**5))
+            1 + (self.model_comp["nebular"].get("velshift", 0) / (3 * 10**5))
         )
 
         wav_idxs = np.abs(model_wavs_rf[:, np.newaxis] - emline_wavs_rf).argmin(axis=0)
@@ -409,9 +429,9 @@ class BagpipesTemplateSampler(TemplateSampler):
             line_templates[:, wav_idx] = unique_line_fluxes[:, line_idx] / width
 
         # Replicate the same sampling used within bagpipes
-        if "veldisp" in list(model_comp):
+        if "veldisp" in list(self.model_comp):
             vres = 3 * 10**5 / config.R_spec / 2.0
-            sigma_pix = model_comp["veldisp"] / vres
+            sigma_pix = self.model_comp["veldisp"] / vres
             k_size = 4 * int(sigma_pix + 1)
             x_kernel_pix = np.arange(-k_size, k_size + 1)
 
@@ -429,9 +449,9 @@ class BagpipesTemplateSampler(TemplateSampler):
 
         redshifted_wavs = (1 + model_redshifts)[:, np.newaxis] * model_wavs_rf
 
-        if "R_curve" in list(model_comp):
+        if "R_curve" in list(self.model_comp):
             oversample = 4  # Number of samples per FWHM at resolution R
-            new_wavs = dummy_spec_gen.model_gal._get_R_curve_wav_sampling(
+            new_wavs = self.dummy_spec_gen.model_gal._get_R_curve_wav_sampling(
                 oversample=oversample
             )
 
@@ -477,7 +497,7 @@ class BagpipesTemplateSampler(TemplateSampler):
 
         self.model_emline_spectra = self.model_emline_spectra[unique_inv]
 
-        if dummy_spec_gen.model_gal.spec_units == "mujy":
+        if self.dummy_spec_gen.model_gal.spec_units == "mujy":
             self.model_emline_spectra /= 10**-29 * 2.9979 * 10**18 / self.spec_wavs**2
 
     @staticmethod
@@ -527,7 +547,8 @@ class BagpipesTemplateSampler(TemplateSampler):
         with h5py.File(posterior_path, "r") as post_file:
             samples2d = np.array(post_file["samples2d"])
 
-        return np.array([str(r.tolist()) for r in samples2d])
+        # return np.array([str(r.tolist()) for r in samples2d])
+        return samples2d
 
     @staticmethod
     def load_fit_instructions(posterior_path: Path) -> dict:
