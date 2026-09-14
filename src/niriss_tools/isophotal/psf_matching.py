@@ -11,12 +11,24 @@ import numpy as np
 from astropy.io import fits
 from astropy.nddata import block_reduce
 from numpy.typing import ArrayLike
-from photutils.psf.matching import (
-    CosineBellWindow,
-    TopHatWindow,
-    TukeyWindow,
-    create_matching_kernel,
-)
+
+# Check for photutils deprecation
+try:
+    from photutils.psf_matching import (
+        CosineBellWindow,
+        TopHatWindow,
+        TukeyWindow,
+        create_matching_kernel,
+    )
+except:
+
+    from photutils.psf.matching import (
+        CosineBellWindow,
+        TopHatWindow,
+        TukeyWindow,
+        create_matching_kernel,
+    )
+
 from scipy.ndimage import zoom
 
 from niriss_tools.isophotal import align
@@ -47,8 +59,8 @@ def match_photutils(
         (default), the kernel will not be written to a file.
     window : Callable | None, optional
         The window function to filter high-frequency noise, by default
-        `~photutils.psf.matching.CosineBellWindow(0.5)`. For further
-        details see `~photutils.psf.create_matching_kernel`.
+        `~photutils.psf_matching.CosineBellWindow(0.5)`. For further
+        details see `~photutils.psf_matching.create_matching_kernel`.
     oversample : int, optional
         The factor by which the source and target PSF should be
         oversampled before computing the matching kernel, using
