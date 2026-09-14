@@ -113,7 +113,6 @@ def colour_aggregate(
             curr_sn = np.nansum(m_S[curr_bin_idxs]) / np.sqrt(
                 np.nansum(m_N[curr_bin_idxs] ** 2)
             )
-            # print ("BEGIN", avail_idxs.any(), np.nansum(avail_idxs), curr_sn)
             if curr_sn >= target_sn:
                 new_bin_id = np.nanmax(bin_map) + 1
                 for c in curr_bin_idxs:

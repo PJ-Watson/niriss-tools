@@ -21,25 +21,31 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    # TODO: Check dependencies
     "astropy>=6.1",
     "numpy>=2.0.0",
     "matplotlib>=3.9",
     "tqdm>=4.67",
     "scipy>=1.18",
-    "vorbin",
-    "powerbin",
     "reproject>=0.14",
     "drizzlepac>=3.11.0",
     "photutils>=3.0",
     "shapely>=2.0.4",
-    "bagpipes-extended@git+https://github.com/PJ-Watson/bagpipes-extended",
-    "bagpipes>=1.3.6",
     "grizli[jwst,aws]@git+https://github.com/PJ-Watson/grizli@new_workflow",
     "pypher>=0.7.3",
     "tomlkit",
     "psutil"
 ]
+
+[project.optional-dependencies]
+adaptive-binning = [
+    "vorbin",
+    "powerbin",
+]
+bagpipes = [
+    "bagpipes-extended@git+https://github.com/PJ-Watson/bagpipes-extended",
+    "bagpipes>=1.3.6",
+]
+all = ["niriss-tools[adaptive-binning, bagpipes]"]
 
 [project.urls]
 "Homepage" = "https://github.com/PJ-Watson/niriss-tools"

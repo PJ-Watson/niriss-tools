@@ -14,10 +14,18 @@ from astropy.wcs import WCS
 from numpy.typing import ArrayLike
 
 try:
-    POWERBIN_AVAIL = True
     from powerbin import PowerBin
+
+    POWERBIN_AVAIL = True
 except:
     POWERBIN_AVAIL = False
+
+try:
+    from vorbin.voronoi_2d_binning import voronoi_2d_binning
+
+    VORBIN_AVAIL = True
+except:
+    VORBIN_AVAIL = False
 
 from niriss_tools.sed import colour_binning
 
@@ -213,8 +221,6 @@ def constrained_adaptive(
         f_mask = np.zeros_like(f_noise)
     else:
         f_mask = mask.ravel()
-    # plt.imshow(mask)
-    # plt.show()
 
     hex_idxs, hex_bin_n, hex_s_n, hex_inv = hexbin(
         X.ravel(),
@@ -235,7 +241,7 @@ def constrained_adaptive(
 
     vorbin_idx = (
         ~good_hex_data & np.isfinite(f_noise) & np.isfinite(f_signal) & (f_noise > 0)
-    )  # & (f_signal > 0)
+    )
 
     if mask is not None:
         vorbin_idx &= ~mask.ravel()
@@ -252,26 +258,16 @@ def constrained_adaptive(
             # sn /= 1 + 1.07 * np.log10(len(index))
             return sn**2
 
-        # print(
-        #     f_signal[vorbin_idx],
-        #     f_noise[vorbin_idx],
-        #     (np.any(f_signal[vorbin_idx] <= 0)),
-        #     (np.any(f_noise[vorbin_idx] <= 0)),
-        # )
         pow_obj = PowerBin(
             np.column_stack([X.ravel()[vorbin_idx], Y.ravel()[vorbin_idx]]),
             capacity_spec,
             target_capacity=target_sn**2,
-            # verbose=3,
             pixelsize=1.0,
         )
 
-        # pow_obj.plot(capacity_scale='sqrt', ylabel='S/N')
-        # plt.show()
-
         vor_idxs, vor_inv = np.unique(pow_obj.bin_num, return_inverse=True)
 
-    else:
+    elif VORBIN_AVAIL and (not use_powerbin):
 
         from vorbin.voronoi_2d_binning import voronoi_2d_binning
 
@@ -290,6 +286,13 @@ def constrained_adaptive(
 
         vor_idxs, vor_inv = np.unique(vorbin_output[0], return_inverse=True)
 
+    else:
+
+        raise ImportError(
+            f"The required package {"powerbin" if use_powerbin else "vorbin"} is not "
+            "available. Please install this, then re-run the script."
+        )
+
     vor_idxs += np.max(hex_idxs) + 1
 
     num_vor_bins = len(np.unique(vor_idxs))
@@ -304,7 +307,7 @@ def constrained_adaptive(
     binned_signal = np.bincount(all_idxs, weights=f_signal)
     binned_noise = np.sqrt(np.bincount(all_idxs, weights=f_noise**2))
 
-    binned_s_n = binned_signal / binned_noise  # [all_inv].reshape(signal.shape)
+    binned_s_n = binned_signal / binned_noise
     bin_labels = all_idxs.reshape(signal.shape)
     bin_inv = all_inv.reshape(signal.shape)
     print(f"Total bins: {len(_all_unq)} (Hex: {num_hex_bins}, Voronoi: {num_vor_bins})")
@@ -357,8 +360,6 @@ def constrained_adaptive(
 
         for a in axs.flatten():
             a.set_facecolor("k")
-
-        # plt.imshow(hex_idxs.reshape(signal.shape), origin="lower")
 
         plt.show()
 
@@ -674,12 +675,13 @@ def bin_and_save(
         )
 
     if binned_name is None:
-        # Give it a meaningful name - this avoids confusion if rerunning with multiple configurations
+        # Give it a meaningful name - this avoids confusion if
+        # rerunning with multiple configurations
         binned_name = f"{obj_id}_{bin_scheme}_{bin_diameter}_{target_sn}_{sn_filter}"
 
     save_path = out_dir / f"{binned_name}_data.fits"
     if save_path.is_file() and not overwrite:
-        print(
+        raise OSError(
             f"'{save_path.name}' already exists. Set `overwrite=True` "
             "if you wish to overwrite this file."
         )
