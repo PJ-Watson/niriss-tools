@@ -901,7 +901,7 @@ class MultiRegionFit:
         # The function to produce the templates - only a couple of
         # parameters change on each iteration.
         fwd_model_fn = partial(
-            forward_model_independent,
+            worker_forward_model,
             spec_wavs=self.spec_wavs,
             temp_offset=self.temp_offset,
             memmap=memmap,
@@ -1766,30 +1766,62 @@ def init_forward_model(
     return shared_model_spectra, shared_temp_arr
 
 
-def forward_model_independent(
+def worker_forward_model(
     seg_idx: int,
     seg_id: int,
     spec_wavs: np.ndarray[float],
     temp_offset: int = 0,
     memmap: bool = False,
 ):
+    """
+    Forward model all template spectra for a given region.
+
+    We do not assume that segmentation IDs are 0-indexed, nor that they
+    are contiguous, hence the requirement for both the index and value in
+    the function parameters.
+
+    Parameters
+    ----------
+    seg_idx : int
+        The index of the region in an ordered array of IDs.
+    seg_id : int
+        The actual ID of the region.
+    spec_wavs : np.ndarray[float]
+        A 1D array of wavelengths.
+    temp_offset : int, optional
+        The fixed offset into the shared template array, to allow for
+        polynomial or background templates. By default ``0``.
+    memmap : bool, optional
+        Whether the shared forward-modelled array is backed by a binary
+        file on disk using `numpy.memmap`. By default, ``False``.
+    """
+
+    direct_masked = [
+        beam.beam.direct * (beam.regions_seg_map == seg_id)
+        for beam in multibeam_object.beams
+    ]
+
+    temp_resamp_1d = np.zeros((2, len(spec_wavs)))
+    temp_resamp_1d[0, :] = spec_wavs
+
+    row_offset = (shared_model_spectra[seg_idx].shape[0] * seg_idx) + temp_offset
 
     for sample_i, temp_spec in enumerate(shared_model_spectra[seg_idx]):
-        temp_resamp_1d = np.c_[spec_wavs, temp_spec].T
+        temp_resamp_1d[1, :] = temp_spec
         tmodel = np.hstack(
             [
                 beam.compute_model(
                     spectrum_1d=temp_resamp_1d,
-                    thumb=beam.beam.direct * (beam.regions_seg_map == seg_id),
+                    thumb=direct,
                     in_place=False,
                     is_cgs=True,
                 )[beam.fit_mask]
-                for beam in multibeam_object.beams
+                for beam, direct in zip(multibeam_object.beams, direct_masked)
             ]
         )
 
         shared_temp_arr[
-            (shared_model_spectra[seg_idx].shape[0] * seg_idx) + sample_i + temp_offset,
+            row_offset + sample_i,
             :,
         ] += tmodel
 
