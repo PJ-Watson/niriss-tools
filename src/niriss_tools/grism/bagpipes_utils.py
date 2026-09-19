@@ -10,12 +10,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 from bagpipes import config
+from bagpipes_extended.sed.specgen import BagpipesSpecGenerator, air_to_vac
 from grizli.utils_numba.interp import interp_conserve_c
 from numpy.typing import ArrayLike
 
 from niriss_tools.grism import float_dtype
 from niriss_tools.grism.samplers import TemplateSampler
-from niriss_tools.grism.specgen import BagpipesSpecGenerator, air_to_vac
 
 __all__ = ["BagpipesTemplateSampler", "init_bagpipes_spec_gen"]
 
@@ -234,8 +234,8 @@ class BagpipesTemplateSampler(TemplateSampler):
 
         if (
             (extra_region_idxs is not None)
-            & (len(extra_region_idxs) > 0)
-            & (n_extra_samples > 0)
+            and (len(extra_region_idxs) > 0)
+            and (n_extra_samples > 0)
         ):
             extra_ids = np.tile(
                 np.arange(len(self.posterior_ids))[:, np.newaxis, np.newaxis],
@@ -286,9 +286,12 @@ class BagpipesTemplateSampler(TemplateSampler):
                     dtype=float_dtype,
                     buffer=shm_model_spectra.buf,
                 )
-            model_spectra_arr[:] = self.model_spectra.reshape(
-                shared_memory_shape
-            ).astype(float_dtype)
+            if self.model_spectra.dtype == float_dtype:
+                model_spectra_arr.flat = self.model_spectra.flat
+            else:
+                model_spectra_arr[:] = self.model_spectra.reshape(
+                    shared_memory_shape
+                ).astype(float_dtype)
             return shm_model_spectra.name, model_spectra_arr.shape
 
         return
@@ -387,8 +390,8 @@ class BagpipesTemplateSampler(TemplateSampler):
 
         if not (
             hasattr(self, "model_params")
-            & hasattr(self, "model_line_fluxes")
-            & (len(self.model_params) == len(self.model_line_fluxes))
+            and hasattr(self, "model_line_fluxes")
+            and (len(self.model_params) == len(self.model_line_fluxes))
         ):
             raise ValueError(
                 "Either the model parameters or the line fluxes have not "
@@ -521,7 +524,7 @@ class BagpipesTemplateSampler(TemplateSampler):
             spectrum.
         """
 
-        return spec_generator.sample(
+        return spec_generator.sample_spec(
             ast.literal_eval(param_vector), return_line_fluxes=True
         )
 

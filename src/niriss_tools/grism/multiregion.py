@@ -849,6 +849,10 @@ class MultiRegionFit:
         # n_shifted = 0
         # n_shifted_samples = 0
 
+        self.n_samples = n_samples
+        self.n_shifted = n_shifted
+        self.n_shifted_samples = n_shifted_samples
+
         # Try to allow for both memory and file-backed multiprocessing of
         # large arrays
 
@@ -865,14 +869,16 @@ class MultiRegionFit:
 
         # The total number of templates
         NTEMP = self.n_regions * n_samples
-        if n_shifted > 0:
-            NTEMP += self.n_regions * n_shifted * n_shifted_samples
+        if self.n_shifted > 0:
+            NTEMP += self.n_regions * self.n_shifted * self.n_shifted_samples
 
         # Non-template rows in A (background and polynomial components)
         self.temp_offset = A.shape[0]
 
         # Set up both the shared memory and process pool
-        self.initialise_shared_memory(n_samples + (n_shifted * n_shifted_samples))
+        self.initialise_shared_memory(
+            self.n_samples + (self.n_shifted * self.n_shifted_samples)
+        )
 
         self.initialise_process_pool(cpu_count)
 
@@ -934,14 +940,14 @@ class MultiRegionFit:
                     np.full(total_iters, np.nan),
                     *np.zeros((3, total_iters)),
                     np.zeros((total_iters, n_samples), dtype=int),
-                    np.zeros((total_iters, n_shifted), dtype=int),
+                    np.zeros((total_iters, self.n_shifted), dtype=int),
                     *np.zeros((4, total_iters)),
                     *np.zeros((self.temp_offset, total_iters)),
                     *np.zeros(
                         (
                             self.n_regions,
                             total_iters,
-                            n_samples + (n_shifted * n_shifted_samples),
+                            self.n_samples + (self.n_shifted * self.n_shifted_samples),
                         )
                     ),
                 ],
@@ -1013,7 +1019,7 @@ class MultiRegionFit:
                 else:
                     model_seeds, id_shifts = (
                         self.template_sampler.gen_model_seeds_from_iter(
-                            iteration, n_samples, n_shifted
+                            iteration, self.n_samples, self.n_shifted
                         )
                     )
 
@@ -1029,7 +1035,7 @@ class MultiRegionFit:
                 self.template_sampler.gen_all_spectra_from_seeds(
                     model_seeds=model_seeds,
                     extra_region_idxs=id_shifts,
-                    n_extra_samples=n_shifted_samples,
+                    n_extra_samples=self.n_shifted_samples,
                     shared_memory_manger=self.smm,
                     shared_memory_name=self.shm_model_spectra.name,
                     shared_memory_shape=self.model_spectra_arr.shape,
@@ -1087,8 +1093,9 @@ class MultiRegionFit:
                 # signatures and return values
                 if nnls_method == "adelie" and HAS_ADELIE:
 
+                    stacked_Ax_ad = adelie.matrix.dense(stacked_Ax, n_threads=cpu_count)
                     state = adelie.solver.bvls(
-                        stacked_Ax,
+                        stacked_Ax_ad,
                         y,
                         lower=np.zeros(stacked_Ax.shape[-1], dtype=float_dtype),
                         upper=np.full(stacked_Ax.shape[-1], np.inf, dtype=float_dtype),
@@ -1100,7 +1107,7 @@ class MultiRegionFit:
                     state_iters = deepcopy(state.iters)
                     coeffs = deepcopy(state.beta)
                     coeffs[: self.MB.N] -= pedestal
-                    del state
+                    del state, stacked_Ax_ad
 
                 elif nnls_method == "numba":
 
@@ -1156,7 +1163,7 @@ class MultiRegionFit:
                     _nnls_t,
                     model_seeds,
                     id_shifts,
-                    n_shifted_samples,
+                    self.n_shifted_samples,
                     t2 - t1,
                     time() - t0,
                     ok_temp.sum(),
@@ -1206,7 +1213,7 @@ class MultiRegionFit:
         self.template_sampler.gen_all_spectra_from_seeds(
             model_seeds=self.best_model_seeds,
             extra_region_idxs=self.best_id_shifts,
-            n_extra_samples=n_shifted_samples,
+            n_extra_samples=self.n_shifted_samples,
             shared_memory_manger=self.smm,
             shared_memory_name=self.shm_model_spectra.name,
             shared_memory_shape=self.model_spectra_arr.shape,
@@ -1245,7 +1252,7 @@ class MultiRegionFit:
         self.template_sampler.gen_all_spectra_from_seeds(
             model_seeds=self.best_model_seeds,
             extra_region_idxs=self.best_id_shifts,
-            n_extra_samples=n_shifted_samples,
+            n_extra_samples=self.n_shifted_samples,
             shared_memory_manger=self.smm,
             shared_memory_name=self.shm_model_spectra.name,
             shared_memory_shape=self.model_spectra_arr.shape,
@@ -1369,7 +1376,7 @@ class MultiRegionFit:
             self.template_sampler.gen_all_spectra_from_seeds(
                 model_seeds=self.best_model_seeds,
                 extra_region_idxs=self.best_id_shifts,
-                n_extra_samples=n_shifted_samples,
+                n_extra_samples=self.n_shifted_samples,
                 shared_memory_manger=self.smm,
                 shared_memory_name=self.shm_model_spectra.name,
                 shared_memory_shape=self.model_spectra_arr.shape,
