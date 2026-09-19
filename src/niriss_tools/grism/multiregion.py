@@ -23,8 +23,9 @@ from astropy.io import fits
 from astropy.nddata import block_reduce
 from astropy.table import Table
 from astropy.wcs import WCS
-from bagpipes_extended import AtlasFitter, AtlasGenerator
 from bagpipes_extended.pipeline import generate_fit_params, load_photom_bagpipes
+from bagpipes_extended.sed.atlas_fitter import AtlasFitter
+from bagpipes_extended.sed.atlas_generator import AtlasGenerator
 from grizli import utils as grizli_utils
 from grizli.multifit import MultiBeam, drizzle_to_wavelength
 from numpy.typing import ArrayLike
@@ -38,9 +39,7 @@ from niriss_tools.grism.fitting_tools import CDNNLS, fennls, fnnls
 # from niriss_tools.grism.samplers import GrizliTemplateSampler
 from niriss_tools.grism.specgen import (
     CLOUDY_LINE_MAP,
-    BagpipesSpecGenerator,
     check_coverage,
-    pre_gen_spec,
 )
 from niriss_tools.grism.utils import (
     LINE_UP,
@@ -309,50 +308,50 @@ class MultiRegionFit:
             As above.
         """
 
-        if bagpipes_atlas_params is None:
-            bagpipes_atlas_params = self.bagpipes_atlas_params
-
-        os.chdir(self.pipes_dir)
-
-        if load_fn is None:
-
-            load_fn = partial(
-                load_photom_bagpipes,
-                phot_cat=binned_data_path,
-                cat_hdu_index=binned_data_hdu,
-            )
-
-        fit = AtlasFitter(
-            fit_instructions=bagpipes_atlas_params,
-            atlas_path=atlas_path,
-            out_path=self.pipes_dir.parent,
-            overwrite=overwrite_fit,
-        )
-
         self.run_name = str(Path(binned_data_path).stem).removesuffix("_data")
+        catalogue_out_path = self.pipes_dir.parent / f"{self.run_name}.fits"
 
-        obs_table = Table.read(binned_data_path, hdu=binned_data_hdu)
-        cat_IDs = np.array(obs_table[id_colname])
-
-        catalogue_out_path = fit.out_path / f"{self.run_name}.fits"
         if (not catalogue_out_path.is_file()) or overwrite_fit:
 
-            fit.fit_catalogue(
-                IDs=cat_IDs,
-                load_data=load_fn,
-                spectrum_exists=False,
-                make_plots=False,
-                cat_filt_list=self.filter_list,
-                run=self.run_name,
-                parallel=n_cores,
-                redshifts=self.obj_z if obj_z is None else obj_z,
-                redshift_range=z_range,
-                n_posterior=500,
-            )
-        else:
-            fit.cat = Table.read(catalogue_out_path)
+            if bagpipes_atlas_params is None:
+                bagpipes_atlas_params = self.bagpipes_atlas_params
 
-        self.sed_fit_cat_path = fit.out_path / f"{self.run_name}.fits"
+            os.chdir(self.pipes_dir)
+
+            if load_fn is None:
+
+                load_fn = partial(
+                    load_photom_bagpipes,
+                    phot_cat=binned_data_path,
+                    cat_hdu_index=binned_data_hdu,
+                )
+
+            obs_table = Table.read(binned_data_path, hdu=binned_data_hdu)
+            cat_IDs = np.array(obs_table[id_colname])
+
+            with AtlasFitter(
+                fit_instructions=bagpipes_atlas_params,
+                atlas_path=atlas_path,
+                out_path=self.pipes_dir.parent,
+                overwrite=overwrite_fit,
+            ) as atlas_fitter:
+
+                atlas_fitter.fit_catalogue(
+                    IDs=cat_IDs,
+                    load_data=load_fn,
+                    spectrum_exists=False,
+                    make_plots=False,
+                    cat_filt_list=self.filter_list,
+                    run=self.run_name,
+                    parallel=n_cores,
+                    redshifts=self.obj_z if obj_z is None else obj_z,
+                    redshift_range=z_range,
+                    n_posterior=500,
+                )
+        # else:
+        #     fit.cat = Table.read(catalogue_out_path)
+
+        self.sed_fit_cat_path = self.pipes_dir.parent / f"{self.run_name}.fits"
 
     def gen_atlas(
         self,
@@ -448,15 +447,15 @@ class MultiRegionFit:
 
         if not atlas_path.is_file() or remake_atlas:
 
-            atlas_gen = AtlasGenerator(
+            with AtlasGenerator(
                 fit_instructions=self.bagpipes_atlas_params,
                 filt_list=self.filter_list,
                 phot_units="ergscma",
-            )
+            ) as atlas_gen:
 
-            atlas_gen.gen_samples(n_samples=n_samples, parallel=n_cores_atlas)
+                atlas_gen.gen_samples(n_samples=n_samples, parallel=n_cores_atlas)
 
-            atlas_gen.write_samples(filepath=atlas_path)
+                atlas_gen.write_samples(filepath=atlas_path)
 
         return atlas_path
 

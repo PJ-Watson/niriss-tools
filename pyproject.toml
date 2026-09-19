@@ -56,7 +56,7 @@ all = ["niriss-tools[adaptive-binning, bagpipes]"]
 
 [tool.black]
 line-length = 88
-target-version = ["py313", "py314"]
+target-version = ["py313"]
 extend-exclude = "(.*.txt|.*.md|.*.toml|.*.odg)"
 preview = true
 
